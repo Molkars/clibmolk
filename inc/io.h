@@ -156,6 +156,7 @@ Error eprint(const Error *e, Writer w);
 //
 //   io_fprint(w, "{} has {} items, {:.2}% full\n", name, count, pct);
 //   io_print("{:>8} | {:<#6x} | {:^7}", name, flags, true);
+//   io_println("done in {} ms", ms);   // same, plus a newline
 //
 // Placeholders: `{}` or `{:spec}`, with `{{` and `}}` for literal braces.
 //   spec = [[fill]align][+][#][0][width][.precision][type]
@@ -382,14 +383,24 @@ Error io_format(Writer w, const char *fmt, const FormatArg *args,
 #define IO_FW_PICK_(_1, _2, _3, _4, _5, _6, _7, _8, _9, _10, _11, _12, _13,    \
                     _14, _15, _16, _17, _18, NAME, ...)                        \
   NAME
+#define IO_FW_ARGS_(...)                                                       \
+  IO_FW_PICK_(__VA_ARGS__, IO_FW_18, IO_FW_17, IO_FW_16, IO_FW_15, IO_FW_14,   \
+              IO_FW_13, IO_FW_12, IO_FW_11, IO_FW_10, IO_FW_9, IO_FW_8,        \
+              IO_FW_7, IO_FW_6, IO_FW_5, IO_FW_4, IO_FW_3, IO_FW_2,            \
+              0)(__VA_ARGS__)
 /// `io_fprint(w, "x={} y={:>4}", x, y)`: returns an `Error`. [w] is a `Writer`
-#define io_fprint(...)                                                         \
-  io_format(IO_FW_PICK_(__VA_ARGS__, IO_FW_18, IO_FW_17, IO_FW_16, IO_FW_15,   \
-                        IO_FW_14, IO_FW_13, IO_FW_12, IO_FW_11, IO_FW_10,      \
-                        IO_FW_9, IO_FW_8, IO_FW_7, IO_FW_6, IO_FW_5, IO_FW_4,  \
-                        IO_FW_3, IO_FW_2, 0)(__VA_ARGS__))
+#define io_fprint(...) io_format(IO_FW_ARGS_(__VA_ARGS__))
 /// `io_fprint` to stdout
 #define io_print(...) io_fprint(stdoutW, __VA_ARGS__)
+
+/// like `io_format`, then writes a `\n`. If the format fails, nothing at all
+/// is written
+Error io_formatln(Writer w, const char *fmt, const FormatArg *args,
+                  size_t nargs);
+/// `io_fprint` followed by a newline: `io_fprintln(w, "x={}", x)`
+#define io_fprintln(...) io_formatln(IO_FW_ARGS_(__VA_ARGS__))
+/// `io_println("x={}", x)`: `io_fprintln` to stdout
+#define io_println(...) io_fprintln(stdoutW, __VA_ARGS__)
 
 #endif // MOLKIE_IO_H
 
@@ -1049,6 +1060,14 @@ Error io_format(Writer w, const char *fmt, const FormatArg *args,
       return eok();
     }
   }
+}
+
+Error io_formatln(Writer w, const char *fmt, const FormatArg *args,
+                  size_t nargs) {
+  Error e = io_format(w, fmt, args, nargs);
+  if (!e.ok)
+    return e;
+  return Wputc(w, '\n');
 }
 
 #endif // MOLKIE_IO_IMPL
@@ -1746,6 +1765,27 @@ static void io_fmt_file(void) {
   assert(io_print("").ok);
 }
 
+static void io_fmt_println(void) {
+  char b[64];
+  Scratch s = Scratch_init(b, sizeof b);
+  Writer w = Scratch_writer(&s);
+  assert(io_fprintln(w, "x={} y={:>3}", 1, "a").ok);
+  assert(io_fprintln(w, "plain").ok);
+  assert(io_fprintln(w, "").ok);
+  assert(!strcmp(b, "x=1 y=  a\nplain\n\n"));
+  // a bad format writes nothing, not even the newline
+  Scratch_reset(&s);
+  Error e = io_fprintln(w, "{}");
+  assert(!e.ok && e.code == EINVAL && !b[0]);
+  // the writer failing on the newline is reported too
+  char tiny[4];
+  Scratch t = Scratch_init(tiny, sizeof tiny);
+  e = io_fprintln(Scratch_writer(&t), "abc");
+  assert(!e.ok);
+  ASSERT_EQ(e.code, ENOSPC);
+  assert(io_println("{} {}", "to", "stdout").ok);
+}
+
 static void io_fmt_direct_spec(void) {
   // a zeroed FormatSpec is the plain `{}`
   char b[16];
@@ -1828,6 +1868,7 @@ static int io_tests(void) {
       T(io_fmt_errors),
       T(io_fmt_writer_errors),
       T(io_fmt_file),
+      T(io_fmt_println),
       T(io_fmt_direct_spec),
   };
   size_t n = sizeof tests / sizeof *tests, passed = 0;

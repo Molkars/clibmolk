@@ -87,7 +87,9 @@ def cmd_list(a):
 def main():
     p = argparse.ArgumentParser(prog="clibmolk", description=__doc__.split("\n\n")[0])
     p.add_argument("--repo", default=DEFAULT_REPO, help=f"owner/name (default {DEFAULT_REPO})")
-    p.add_argument("--base-url", help="fetch assets from this URL prefix instead of GitHub")
+    p.add_argument("--base-url", default=os.environ.get("CLIBMOLK_BASE_URL"),
+                   help="fetch assets from this URL prefix instead of GitHub "
+                        "(env CLIBMOLK_BASE_URL), e.g. file:///path/to/clibmolk/dist")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     d = sub.add_parser("download", help="download headers and their dependencies")

@@ -202,6 +202,8 @@ to keep in sync:
 ```c
 etry(io_fprint(w, "{} has {} items, {:.1}% full\n", name, count, pct));
 io_print("{:>8} | {:<#6x} | {:^7}\n", name, flags, ok);   // stdout
+io_println("done in {} ms", ms);                          // + newline
+io_fprintln(w, "{}: {}", key, val);                       // any Writer
 ```
 
 - Spec: `{:[[fill]align][+][#][0][width][.precision][type]}`. `align` is `<`
