@@ -6,6 +6,7 @@
 #include "array.h"
 #include "btree.h"
 #include "err.h"
+#include "cstr.h"
 #include "io.h"
 
 typedef array_t(int) Ints;
@@ -58,6 +59,10 @@ void good(void) {
 
   Error e = io_fprint(stdoutW, "{} {:>4} {}", 1, 2.5, "x");
   e = io_fprint(stdoutW, "plain");
+  int parsed;
+  double d;
+  e = cstr_to("1", &parsed);
+  e = cstr_to("1", &d);
   (void)e;
 }
 
@@ -208,5 +213,19 @@ void bad(void) {
 void bad(void) {
   Writer w = stdoutW;
   io_fprint(&w, "x"); // writers are passed by value
+}
+#endif
+
+#ifdef BAD_CSTR_TO_UNSUPPORTED_TYPE
+void bad(void) {
+  char c;
+  cstr_to("x", &c); // no parser for plain char
+}
+#endif
+
+#ifdef BAD_CSTR_TO_BY_VALUE
+void bad(void) {
+  int n = 0;
+  cstr_to("1", n); // the destination is a pointer
 }
 #endif

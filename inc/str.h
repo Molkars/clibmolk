@@ -7,6 +7,7 @@
 
 #include "array.h"
 #include "attr.h"
+#include "cstr.h"
 #include "err.h"
 #include "io.h"
 
@@ -127,11 +128,25 @@ int String_isdigits(const String *s);
 /// if it doesn't fit in a `size_t`
 Error String_to_sizet(const String *s, size_t *dst);
 
+/// `String_to_<name>(const String *, T *)` for each (T, name) in CSTR_TO_TYPES:
+/// the same strict parsers as `cstr_to_<name>` (decimal, no whitespace, no
+/// trailing text, `dst` untouched on error). A String with an embedded NUL is
+/// `EINVAL`
+#define STRING_DECLARE_TO_(T, N) Error String_to_##N(const String *s, T *dst);
+CSTR_TO_TYPES(STRING_DECLARE_TO_)
+#undef STRING_DECLARE_TO_
+
+#define STRING_TO_ASSOC_(T, N) T *: String_to_##N,
+/// `String_to(&s, &dst)`: like `cstr_to`, picks the parser from the type of
+/// `dst`
+#define String_to(s, dst)                                                      \
+  _Generic((dst), CSTR_TO_TYPES(STRING_TO_ASSOC_) struct string_no_parse_ *:   \
+               String_to_int)((s), (dst))
+
 #endif // MOLKIE_STR_H
 
 #if defined(MOLKIE_STR_IMPL) && !defined(MOLKIE_STR_IMPL_DONE)
 #define MOLKIE_STR_IMPL_DONE
-#include "cstr.h"
 #include <assert.h>
 #include <ctype.h>
 #include <errno.h>
@@ -308,6 +323,19 @@ Error String_to_sizet(const String *s, size_t *dst) {
                 String_cstr(s));
   return cstr_to_sizet(String_cstr(s), dst);
 }
+
+// the String is length-based, so an embedded NUL is rejected here rather than
+// silently ending the number
+#define STRING_TO_(T, N)                                                       \
+  Error String_to_##N(const String *s, T *dst) {                               \
+    assert(s && "string is null");                                             \
+    const char *c = String_cstr(s);                                            \
+    if (strlen(c) != s->len)                                                   \
+      return enew(EINVAL, "\"%.*s\" is not a number", (int)s->len, c);         \
+    return cstr_to_##N(c, dst);                                                \
+  }
+CSTR_TO_TYPES(STRING_TO_)
+#undef STRING_TO_
 
 Error String_split(const String *s, Strings *out) {
   assert(s && "string is null");
@@ -720,6 +748,35 @@ static void str_to_sizet(void) {
   String_free(&s);
 }
 
+static void str_to_generic(void) {
+  String s = String_fromc("-12");
+  int i = 0;
+  assert(String_to(&s, &i).ok && i == -12);
+  assert(String_to_int(&s, &i).ok);
+  unsigned u = 5;
+  Error e = String_to(&s, &u); // unsigned takes no sign
+  assert(!e.ok && e.code == EINVAL && u == 5);
+  String d = String_fromc("2.5");
+  double x;
+  assert(String_to(&d, &x).ok && x == 2.5);
+  String b = String_fromc("true");
+  _Bool flag = 0;
+  assert(String_to(&b, &flag).ok && flag);
+  size_t n;
+  String big = String_fromc("99999999999999999999999");
+  assert(String_to(&big, &n).code == ERANGE);
+  String sp = String_fromc(" 1");
+  assert(String_to(&sp, &i).code == EINVAL);
+  String nul = String_from("1\0" "2", 3); // embedded NUL
+  assert(String_to(&nul, &i).code == EINVAL);
+  String_free(&s);
+  String_free(&d);
+  String_free(&b);
+  String_free(&big);
+  String_free(&sp);
+  String_free(&nul);
+}
+
 static void str_to_sizet_errors(void) {
   size_t n = 7;
   const char *bad[] = {"", "-1", "+1", " 1", "1 ", "12a", "1.5"};
@@ -896,7 +953,8 @@ static int str_tests(void) {
       T(str_split),     T(str_split2),
       T(str_split_on),
       T(str_split_on2), T(str_isdigits),
-      T(str_to_sizet),  T(str_to_sizet_errors),
+      T(str_to_sizet),
+      T(str_to_generic),  T(str_to_sizet_errors),
   };
   size_t n = sizeof tests / sizeof *tests, passed = 0;
   for (size_t i = 0; i < n; i++)

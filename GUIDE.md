@@ -260,6 +260,21 @@ cstr_isdigits("123");                // 1; null/empty/non-digit -> 0
 size_t n;
 etry(cstr_to_sizet("42", &n));       // digits only; EINVAL / ERANGE otherwise
 
+int i; double d; bool ok;
+etry(cstr_to("-7", &i));             // destination type picks the parser
+etry(cstr_to("2.5e3", &d));          // (C11 _Generic; or cstr_to_int, _double, ...)
+etry(cstr_to("true", &ok));
+```
+
+Types: `short ushort int uint long ulong llong ullong float double bool`
+(`size_t` works, it is one of the unsigned ones). Strict: decimal only, no
+whitespace, no trailing text. Signed ints take an optional `-`/`+`, unsigned
+none. Floats are `[+-]digits[.digits][e[+-]digits]` (also `inf`/`nan`, no hex);
+overflow is `ERANGE`, underflow rounds to 0. Bool is exactly `true`/`false`.
+`EINVAL` if it isn't a number, `ERANGE` if it doesn't fit; `dst` is untouched
+on error.
+
+```c
 char *s;
 etry(cstr_format(&s, "%s-%d", a, 3)); // malloc'd, you free(s)
 
@@ -304,6 +319,7 @@ not freed.
 ```c
 size_t n;
 etry(String_to_sizet(&word, &n));      // String_isdigits() to pre-check
+etry(String_to(&word, &i));            // same parsers as cstr_to: int, double, bool, ...
 ```
 
 Read a whole file (replaces `str`; bigger than `memmax` bytes is `EFBIG`,
