@@ -11,7 +11,7 @@ int cstr_isdigits(const char *s);
 /// parses the decimal number in `src` to `dst`. `src` must be digits only
 /// (no sign, no spaces, no trailing text). `dst` is untouched on error.
 /// returns an error if `src` isn't a number or doesn't fit
-Error cstr_to_sizet(const char *src, size_t *dst);
+NODISCARD Error cstr_to_sizet(const char *src, size_t *dst);
 
 /// Parses all of [src] into `*dst`: decimal only, no whitespace, no trailing
 /// text. `dst` is untouched on error. `EINVAL` if [src] (or [dst]) is null or
@@ -50,12 +50,12 @@ CSTR_TO_TYPES(CSTR_DECLARE_TO_)
 
 /// sets [out] to a malloc'd printf-style formatted string based on [fmt] and
 /// [...]. [out] is NULL on error
-Error cstr_format(char **out, const char *fmt, ...) PRINTF_LIKE(2, 3);
+NODISCARD Error cstr_format(char **out, const char *fmt, ...) PRINTF_LIKE(2, 3);
 
 /// like `snprintf` into [s] (capacity [n]), but returns an error if the output
 /// doesn't fit or can't be formatted. [s] is always NUL-terminated when
 /// `n > 0`
-Error cstr_sformat(char *s, size_t n, const char *fmt, ...) PRINTF_LIKE(3, 4);
+NODISCARD Error cstr_sformat(char *s, size_t n, const char *fmt, ...) PRINTF_LIKE(3, 4);
 
 #endif // MOLKIE_CSTR_H
 

@@ -14,27 +14,27 @@
 
 /// opens [path] with fopen [mode] and stores the stream in [*out]. [*out] is
 /// null on failure. Retries on EINTR; a bad [mode] is EINVAL
-Error io_open(FILE **out, const char *path, const char *mode);
+NODISCARD Error io_open(FILE **out, const char *path, const char *mode);
 /// flushes and closes [f], reporting any deferred write error (e.g. ENOSPC).
 /// [f] is closed even when this fails, so never close it again. A null [f] is
 /// EINVAL
-Error io_close(FILE *f);
+NODISCARD Error io_close(FILE *f);
 /// writes all [bufsz] bytes of [buf] to [f], retrying on EINTR. [nWritten] (if
 /// non-null) is zeroed first and kept up to date as bytes go out, so on
 /// failure it says how much of [buf] was written. A [bufsz] of 0 is a no-op
 /// that does not look at the stream
-Error io_write(FILE *f, const char *buf, size_t bufsz, size_t *nWrote);
+NODISCARD Error io_write(FILE *f, const char *buf, size_t bufsz, size_t *nWrote);
 /// reads up to [bufsz] bytes into [buf] and stores the count in [nRead]. A
 /// short count (including 0) with an ok result means end of file; failures
 /// return an errno code. [nRead] (if non-null) is zeroed first and kept up to
 /// date as bytes come in, so on failure it says how much of [buf] is valid. A
 /// [bufsz] of 0 is a no-op that does not look at the stream
-Error io_read(FILE *f, char *buf, size_t bufsz, size_t *nRead);
+NODISCARD Error io_read(FILE *f, char *buf, size_t bufsz, size_t *nRead);
 /// copies [src] to [dst] until EOF. Does not flush [dst]. If reading fails
 /// midway, the bytes read before the failure are still written to [dst]
-Error io_forward(FILE *dst, FILE *src);
+NODISCARD Error io_forward(FILE *dst, FILE *src);
 /// flushes [f]; a null [f] is EINVAL (not "flush everything")
-Error io_flush(FILE *f);
+NODISCARD Error io_flush(FILE *f);
 
 // ---------------------------------------------------------------------------
 // Writer / Reader: byte sinks and sources. Both are tiny values (a callback and
@@ -72,7 +72,7 @@ static inline Error Wputc(Writer w, int c) {
 Error Wprintf(Writer w, const char *fmt, ...) PRINTF_LIKE(2, 3);
 Error Wvprintf(Writer w, const char *fmt, va_list argp) PRINTF_LIKE(2, 0);
 
-static inline Error FILE_write(void *f, const char *buf, size_t n) {
+static inline NODISCARD Error FILE_write(void *f, const char *buf, size_t n) {
   return io_write((FILE *)f, buf, n, NULL);
 }
 /// writes to [f]. Failures carry the `errno` text. Header-only on purpose, so
@@ -109,7 +109,7 @@ typedef struct Reader {
 } Reader;
 
 /// [nRead] is optional
-static inline Error Rread(Reader r, char *buf, size_t n, size_t *nRead) {
+static inline NODISCARD Error Rread(Reader r, char *buf, size_t n, size_t *nRead) {
   assert(r.read && "reader is not initialised");
   size_t ignored;
   if (!nRead)
@@ -118,7 +118,7 @@ static inline Error Rread(Reader r, char *buf, size_t n, size_t *nRead) {
   return r.read(r.ctx, buf, n, nRead);
 }
 /// reads one byte into [*c], or `EOF` at the end of input
-static inline Error Rgetc(Reader r, int *c) {
+static inline NODISCARD Error Rgetc(Reader r, int *c) {
   unsigned char b;
   size_t n;
   Error e = Rread(r, (char *)&b, 1, &n);
@@ -126,7 +126,7 @@ static inline Error Rgetc(Reader r, int *c) {
   return e;
 }
 
-static inline Error FILE_read(void *f, char *buf, size_t n, size_t *nRead) {
+static inline NODISCARD Error FILE_read(void *f, char *buf, size_t n, size_t *nRead) {
   return io_read((FILE *)f, buf, n, nRead);
 }
 /// reads from [f], see `io_read`
@@ -143,7 +143,7 @@ Cursor Cursor_init(const char *buf, size_t len);
 Reader Cursor_reader(Cursor *c);
 
 /// copies [src] to [dst] until the end of input
-Error io_copy(Writer dst, Reader src);
+NODISCARD Error io_copy(Writer dst, Reader src);
 
 /// writes `error: <ctx>: ...: <ctx>: <msg>\n` (newest context first, then the
 /// original message) to [w]; writes nothing if [e] is ok. Returns the writer's
@@ -249,8 +249,8 @@ typedef struct FormatArg {
   }
 IO_BUILTIN_TYPES(IO_BUILTIN_ARG_)
 #undef IO_BUILTIN_ARG_
-Error ldouble_format(Writer w, const long double *v, FormatSpec spec);
-static inline Error io_adapt_ldouble(Writer w, const void *p, FormatSpec s) {
+NODISCARD Error ldouble_format(Writer w, const long double *v, FormatSpec spec);
+static inline NODISCARD Error io_adapt_ldouble(Writer w, const void *p, FormatSpec s) {
   return ldouble_format(w, p, s);
 }
 static inline FormatArg io_arg_ldouble(long double v) {
@@ -499,6 +499,7 @@ Error io_flush(FILE *f) {
 }
 
 Error io_forward(FILE *dst, FILE *src) {
+  Error eret = eok();
   char buf[BUFSIZ];
   size_t nRead, nWrote;
   do {
@@ -512,7 +513,8 @@ Error io_forward(FILE *dst, FILE *src) {
     }
     etry(rerr);
   } while (nRead == sizeof buf);
-  return eok();
+end:
+  return eret;
 }
 
 // ---- Writer / Reader ------------------------------------------------------
@@ -597,6 +599,7 @@ static Error _cursorRead(void *p, char *buf, size_t n, size_t *nRead) {
 Reader Cursor_reader(Cursor *c) { return (Reader){_cursorRead, c}; }
 
 Error io_copy(Writer dst, Reader src) {
+  Error eret = eok();
   char buf[BUFSIZ];
   size_t nRead;
   do {
@@ -609,7 +612,8 @@ Error io_copy(Writer dst, Reader src) {
     }
     etry(rerr);
   } while (nRead == sizeof buf);
-  return eok();
+end:
+  return eret;
 }
 
 Error eprint(const Error *e, Writer w) {
@@ -1064,8 +1068,9 @@ Error io_format(Writer w, const char *fmt, const FormatArg *args,
 
 static void io_test_report(Error *e) { efprint(e, stdout); }
 
-// A test body returns an Error (so it can use etry); the wrapper fails the
-// test and prints the error chain if the body failed.
+// A test body returns an Error (so it can use etry, which needs `eret` and an
+// `end:` label); the wrapper fails the test and prints the error chain if the
+// body failed.
 #define IO_TEST(name)                                                          \
   static Error name##_body(void);                                              \
   static void name(void) {                                                     \
@@ -1095,12 +1100,15 @@ static Error expect_fail(Error e, int code) {
 // ok only if [cond]
 #define expect(cond)                                                           \
   do {                                                                         \
-    if (!(cond))                                                               \
-      return enew(EINVAL, "expected: %s", #cond);                              \
+    if (!(cond)) {                                                             \
+      eret = enew(EINVAL, "expected: %s", #cond);                              \
+      goto end;                                                                \
+    }                                                                          \
   } while (0)
 
 // forwards [n] bytes of a repeating pattern through a tmpfile and checks them
 static Error io_roundtrip(size_t n) {
+  Error eret = eok();
   char *in = malloc(n + 1), *out = malloc(n + 1);
   FILE *src = tmpfile(), *dst = tmpfile();
   expect(in && out && src && dst);
@@ -1121,7 +1129,8 @@ static Error io_roundtrip(size_t n) {
   fclose(dst);
   free(in);
   free(out);
-  return eok();
+end:
+  return eret;
 }
 
 IO_TEST(io_empty) { return io_roundtrip(0); }
@@ -1130,25 +1139,30 @@ IO_TEST(io_exact_buf) { return io_roundtrip(BUFSIZ); }
 IO_TEST(io_multi_chunk) { return io_roundtrip(BUFSIZ * 3 + 17); }
 
 IO_TEST(io_forward_null_args) {
+  Error eret = eok();
   FILE *f = tmpfile();
   expect(f);
   etry(expect_fail(io_forward(NULL, f), EINVAL));
   etry(expect_fail(io_forward(f, NULL), EINVAL));
   fclose(f);
-  return eok();
+end:
+  return eret;
 }
 
 IO_TEST(io_forward_read_error) {
+  Error eret = eok();
   // a write-only stream can't be read
   FILE *wo = fopen("/dev/null", "w"), *dst = tmpfile();
   expect(wo && dst);
   etry(expect_fail(io_forward(dst, wo), EBADF));
   fclose(wo);
   fclose(dst);
-  return eok();
+end:
+  return eret;
 }
 
 IO_TEST(io_forward_write_error) {
+  Error eret = eok();
   // a read-only dst can't be written
   FILE *src = tmpfile(), *dst = fopen("/dev/null", "r");
   expect(src && dst);
@@ -1157,24 +1171,30 @@ IO_TEST(io_forward_write_error) {
   etry(expect_fail(io_forward(dst, src), EBADF));
   fclose(src);
   fclose(dst);
-  return eok();
+end:
+  return eret;
 }
 
 IO_TEST(io_forward_error_has_location) {
-  // etry should have added file:line context to the failure
+  Error eret = eok();
+  Error e;
   FILE *f = tmpfile();
   expect(f);
-  Error e = io_forward(f, NULL);
+  // etry should have added file:line context to the failure
+  e = io_forward(f, NULL);
   expect(!e.ok && e.ctx);
   efree(&e);
   fclose(f);
-  return eok();
+end:
+  return eret;
 }
 
 IO_TEST(io_write_ok) {
+  Error eret = eok();
+  size_t n = 99;
+  char b[7] = {0};
   FILE *f = tmpfile();
   expect(f);
-  size_t n = 99;
   errno = EBADF; // a stale errno must not leak into a successful write
   etry(io_write(f, "abc", 3, &n));
   expect(n == 3);
@@ -1183,49 +1203,53 @@ IO_TEST(io_write_ok) {
   etry(io_write(f, "def", 3, NULL)); // nWritten is optional
   etry(io_flush(f));
   rewind(f);
-  char b[7] = {0};
   expect(fread(b, 1, 6, f) == 6 && !strcmp(b, "abcdef"));
   fclose(f);
-  return eok();
+end:
+  return eret;
 }
 
 IO_TEST(io_write_errors) {
+  Error eret = eok();
   size_t n = 99;
+  FILE *f = tmpfile();
+  FILE *ro = fopen("/dev/null", "r");
+  expect(f && ro);
   etry(expect_fail(io_write(NULL, "x", 1, &n), EINVAL));
   expect(n == 0);
-  FILE *f = tmpfile();
-  expect(f);
   n = 99;
   etry(expect_fail(io_write(f, NULL, 1, &n), EINVAL));
   expect(n == 0);
   fclose(f);
-  FILE *ro = fopen("/dev/null", "r");
-  expect(ro);
   n = 99;
   etry(expect_fail(io_write(ro, "x", 1, &n), EBADF));
   expect(n == 0);
   fclose(ro);
-  return eok();
+end:
+  return eret;
 }
 
 IO_TEST(io_write_full_device) {
+  Error eret = eok();
+  size_t n = 99;
   FILE *f = fopen("/dev/full", "w");
   expect(f);
   setvbuf(f, NULL, _IONBF, 0); // fail at write time, not at flush
-  size_t n = 99;
   etry(expect_fail(io_write(f, "x", 1, &n), ENOSPC));
   expect(n == 0);
   fclose(f);
-  return eok();
+end:
+  return eret;
 }
 
 IO_TEST(io_read_ok) {
+  Error eret = eok();
+  char b[16];
+  size_t n = 99;
   FILE *f = tmpfile();
   expect(f);
   fputs("hello", f);
   rewind(f);
-  char b[16];
-  size_t n = 99;
   errno = EBADF; // stale
   etry(io_read(f, b, 3, &n));
   expect(n == 3 && !memcmp(b, "hel", 3));
@@ -1237,68 +1261,74 @@ IO_TEST(io_read_ok) {
   expect(n == 0);
   etry(io_read(f, b, 0, NULL)); // nRead is optional
   fclose(f);
-  return eok();
+end:
+  return eret;
 }
 
 IO_TEST(io_read_errors) {
+  Error eret = eok();
   char b[4];
   size_t n = 99;
+  FILE *f = tmpfile();
+  FILE *wo = fopen("/dev/null", "w");
+  expect(f && wo);
   etry(expect_fail(io_read(NULL, b, sizeof b, &n), EINVAL));
   expect(n == 0);
-  FILE *f = tmpfile();
-  expect(f);
   n = 99;
   etry(expect_fail(io_read(f, NULL, 1, &n), EINVAL));
   expect(n == 0);
   fclose(f);
-  FILE *wo = fopen("/dev/null", "w");
-  expect(wo);
   n = 99;
   etry(expect_fail(io_read(wo, b, sizeof b, &n), EBADF));
   expect(n == 0);
   fclose(wo);
-  return eok();
+end:
+  return eret;
 }
 
 IO_TEST(io_flush_cases) {
-  etry(expect_fail(io_flush(NULL), EINVAL));
+  Error eret = eok();
   FILE *f = tmpfile();
-  expect(f);
+  FILE *full = fopen("/dev/full", "w");
+  expect(f && full);
+  etry(expect_fail(io_flush(NULL), EINVAL));
   errno = EBADF; // stale
   etry(io_flush(f));
   fclose(f);
   // a buffered write to a full device only fails at flush
-  FILE *full = fopen("/dev/full", "w");
-  expect(full);
   etry(io_write(full, "x", 1, NULL));
   etry(expect_fail(io_flush(full), ENOSPC));
   fclose(full);
-  return eok();
+end:
+  return eret;
 }
 
 IO_TEST(io_open_close_roundtrip) {
+  Error eret = eok();
   char path[] = "/tmp/io_test_XXXXXX";
+  FILE *f = (FILE *)1;
+  char b[8] = {0};
+  size_t n;
   int fd = mkstemp(path);
   expect(fd >= 0);
   close(fd);
 
-  FILE *f = (FILE *)1;
   etry(io_open(&f, path, "w"));
   expect(f);
   etry(io_write(f, "hello", 5, NULL));
   etry(io_close(f));
 
-  char b[8] = {0};
-  size_t n;
   etry(io_open(&f, path, "r"));
   etry(io_read(f, b, sizeof b, &n));
   etry(io_close(f));
   remove(path);
   expect(n == 5 && !strcmp(b, "hello"));
-  return eok();
+end:
+  return eret;
 }
 
 IO_TEST(io_open_errors) {
+  Error eret = eok();
   FILE *f = (FILE *)1;
   etry(expect_fail(io_open(&f, "/nonexistent/dir/file", "r"), ENOENT));
   expect(f == NULL);
@@ -1308,25 +1338,30 @@ IO_TEST(io_open_errors) {
   etry(expect_fail(io_open(&f, NULL, "r"), EINVAL));
   etry(expect_fail(io_open(&f, "/dev/null", NULL), EINVAL));
   etry(expect_fail(io_open(NULL, "/dev/null", "r"), EINVAL));
-  return eok();
+end:
+  return eret;
 }
 
 IO_TEST(io_open_error_names_path) {
+  Error eret = eok();
   FILE *f;
   Error e = io_open(&f, "/nonexistent/x", "r");
   expect(!e.ok && strstr(e.msg, "/nonexistent/x"));
   efree(&e);
-  return eok();
+end:
+  return eret;
 }
 
 IO_TEST(io_close_cases) {
+  Error eret = eok();
   etry(expect_fail(io_close(NULL), EINVAL));
   // buffered data that can't be written is reported at close
   FILE *full;
   etry(io_open(&full, "/dev/full", "w"));
   etry(io_write(full, "x", 1, NULL));
   etry(expect_fail(io_close(full), ENOSPC));
-  return eok();
+end:
+  return eret;
 }
 
 // ---- Writer / Reader ----
@@ -1722,6 +1757,34 @@ static void io_fmt_direct_spec(void) {
   assert(!strcmp(b, "12abc"));
 }
 
+IO_TEST(io_defer_close) {
+  Error eret = eok();
+  EDEFERS(2);
+  char path[] = "/tmp/io_defer_XXXXXX";
+  FILE *f;
+  char *buf;
+  int fd = mkstemp(path);
+  expect(fd >= 0);
+  close(fd);
+  etry(io_open(&f, path, "w"));
+  edefer(io_close, f);
+  etry(io_write(f, "hi", 2, NULL));
+  buf = malloc(8);
+  expect(buf);
+  edefer_void(free, buf);
+  etry(io_write(f, "!", 1, NULL));
+end:
+  erundefers(); // closes (flushes) f, frees buf
+  if (eret.ok) {
+    char b[8] = {0};
+    FILE *r = fopen(path, "r");
+    expect(r && fread(b, 1, 7, r) == 3 && !strcmp(b, "hi!"));
+    fclose(r);
+  }
+  remove(path);
+  return eret;
+}
+
 static int io_tests(void) {
   static const TestCase tests[] = {
       T(io_empty),
@@ -1742,6 +1805,7 @@ static int io_tests(void) {
       T(io_open_errors),
       T(io_open_error_names_path),
       T(io_close_cases),
+      T(io_defer_close),
       T(io_writer_scratch),
       T(io_writer_scratch_full),
       T(io_writer_scratch_nul),

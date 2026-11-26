@@ -6,6 +6,8 @@
 #include "array.h"
 #include "btree.h"
 #include "err.h"
+#include <stdlib.h>
+
 #include "cstr.h"
 #include "io.h"
 
@@ -13,6 +15,28 @@ typedef array_t(int) Ints;
 typedef array_t(double) Doubles;
 typedef btree_str_t(int) Ages;
 typedef btree_t(int, double) IntMap;
+
+static Error ret_error(int a, void *p) {
+  (void)a, (void)p;
+  return eok();
+}
+static void ret_void(int a, const char *s) { (void)a, (void)s; }
+
+// edefer: the call is checked like a normal call
+Error good_defer(void) {
+  Error eret = eok();
+  EDEFERS(4);
+  char *buf = malloc(8);
+  FILE *f = NULL;
+  edefer_void(free, buf);
+  edefer(ret_error, 1, buf);
+  edefer_void(ret_void, 1, "x");
+  edefer(io_close, f);
+  etry(eok());
+end:
+  erundefers();
+  return eret;
+}
 
 void good(void) {
   Ints a = array_empty(int);
@@ -228,4 +252,58 @@ void bad(void) {
   int n = 0;
   cstr_to("1", n); // the destination is a pointer
 }
+#endif
+
+#define TC_DEFER_CASE(call)                                                   \
+  Error bad(void) {                                                            \
+    Error eret = eok();                                                        \
+    EDEFERS(1);                                                                \
+    double d = 1;                                                              \
+    Ints ints = array_empty(int);                                              \
+    (void)ints;                                                                \
+    Big big = {0};                                                             \
+    (void)d, (void)big;                                                        \
+    call;                                                                      \
+  end:                                                                         \
+    erundefers();                                                              \
+    return eret;                                                               \
+  }
+
+typedef struct {
+  int a, b;
+} Big;
+
+#ifdef BAD_DEFER_TOO_MANY_ARGS
+TC_DEFER_CASE(edefer_void(ret_void, 1, "x", 3))
+#endif
+
+#ifdef BAD_DEFER_TOO_FEW_ARGS
+TC_DEFER_CASE(edefer_void(ret_void, 1))
+#endif
+
+#ifdef BAD_DEFER_WRONG_ARG_TYPE
+TC_DEFER_CASE(edefer_void(free, 5)) // an int is not a pointer
+#endif
+
+#ifdef BAD_DEFER_DOUBLE_ARG
+TC_DEFER_CASE(edefer_void(ret_void, d, "x"))
+#endif
+
+#ifdef BAD_DEFER_STRUCT_ARG
+TC_DEFER_CASE(edefer_void(ret_void, big, "x"))
+#endif
+
+#ifdef BAD_DEFER_VOID_FN_IN_EDEFER
+TC_DEFER_CASE(edefer(ret_void, 1, "x")) // edefer needs an Error-returning fn
+#endif
+
+#ifdef BAD_DEFER_MACRO_CALLEE
+TC_DEFER_CASE(edefer_void(array_free0, &ints, free)) // a macro, not a function
+#endif
+
+#ifdef BAD_DEFER_SEVEN_ARGS
+static void seven(int a, int b, int c, int d, int e, int f, int g) {
+  (void)a, (void)b, (void)c, (void)d, (void)e, (void)f, (void)g;
+}
+TC_DEFER_CASE(edefer_void(seven, 1, 2, 3, 4, 5, 6, 7))
 #endif

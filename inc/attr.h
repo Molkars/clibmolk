@@ -11,4 +11,13 @@
 #define PRINTF_LIKE(fmt_idx, args_idx)
 #endif
 
+/// Warns when the result of a call is ignored. On the `Error`-returning
+/// functions, where an ignored failure is almost always a bug. (GCC also
+/// warns on `(void)f()`: keep the `Error` and `efree` it, or use `ejoin`.)
+#if defined(__GNUC__) || defined(__clang__)
+#define NODISCARD __attribute__((warn_unused_result))
+#else
+#define NODISCARD
+#endif
+
 #endif // MOLKIE_ATTR_H

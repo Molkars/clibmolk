@@ -15,6 +15,14 @@ CFLAGS = ["-std=c11", "-D_POSIX_C_SOURCE=200809L", "-Wall", "-Wextra",
 NO_TESTS = {"attr", "test"}  # no runnable tests of their own
 
 
+def jump_flag():
+    """-Wjump-misses-init where the compiler has it (gcc): a goto that skips an
+    initialiser is a bug with etry."""
+    r = subprocess.run([CC, "-Werror", "-Wjump-misses-init", "-x", "c",
+                        "-fsyntax-only", "-"], input="", capture_output=True, text=True)
+    return ["-Wjump-misses-init"] if r.returncode == 0 else []
+
+
 def closure(deps, name):
     seen, todo = [], [name]
     while todo:
@@ -41,7 +49,7 @@ def main():
             c = os.path.join(tmp, name + ".c")
             exe = os.path.join(tmp, name)
             open(c, "w").write("\n".join(src) + "\n")
-            r = subprocess.run([CC, *CFLAGS, "-o", exe, c], capture_output=True, text=True)
+            r = subprocess.run([CC, *CFLAGS, *jump_flag(), "-o", exe, c], capture_output=True, text=True)
             if r.returncode:
                 print(f"BUILD FAIL {name} (needs: {', '.join(mods[1:]) or 'nothing'})")
                 print(r.stderr)

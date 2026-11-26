@@ -1,14 +1,21 @@
 cc := env("CC", "gcc")
-cflags := "-std=c11 -D_POSIX_C_SOURCE=200809L -Wall -Wextra -Wpedantic -Wformat=2 -Wmissing-format-attribute -Werror -Iinc"
+# gcc only: catches a goto (etry) skipping a variable initialiser
+extra := `echo | ${CC:-gcc} -Werror -Wjump-misses-init -x c -fsyntax-only - 2>/dev/null && echo -Wjump-misses-init || true`
+cflags := extra + " -std=c11 -D_POSIX_C_SOURCE=200809L -Wall -Wextra -Wpedantic -Wformat=2 -Wmissing-format-attribute -Werror -Iinc"
 
 default: test
 
 # everything: deps check, all modules at once, each module standalone, typecheck
-test: deps all asan standalone fmt-user typecheck
+test: deps lint all asan standalone fmt-user typecheck
 
 # deps.json matches what the headers include
 deps:
   python3 tools/check_deps.py
+
+# etry/edefer conventions: eret + end:, no early return, no skipped initialisers
+lint:
+  python3 tools/lint.py --selftest
+  python3 tools/lint.py
 
 # all modules + extensions in one program
 all:

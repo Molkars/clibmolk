@@ -49,23 +49,78 @@ return eok();
 ```
 
 - `msg` is 160 chars, truncated. `code` is errno or your own.
-- `etry(expr)`: if `expr` failed, return it up (adds `file:line` ctx).
+- `etry(expr)`: if `expr` failed, store it in `eret` (adds `file:line` ctx) and
+  `goto end`. See "One way out" below.
 - `etry2(expr, "while %s", what)`: same, plus your message.
+- `ejoin(&e, later)`: keep the first error, drop `later` (frees its ctx). For
+  cleanup that can fail without hiding the real error.
 - `ectx(&e, fmt, ...)`: add context by hand.
 - `efree(&e)`: free ctx chain. Needed only if you **swallow** a failure.
   If you return it, the caller owns it. Safe on ok, safe twice.
 - An `Error` with ctx owns heap memory: move it, don't copy it around.
+- Most `Error`-returning functions are `NODISCARD`: ignoring the result warns
+  (not the print helpers `efprint`, `eprint`, `W*`, `io_fprint`). gcc warns even
+  on a `(void)` cast, so to drop one on purpose keep it and `efree` it.
+
+### One way out
+
+`just lint` (`tools/lint.py`) checks all of this, and gcc's `-Wjump-misses-init`
+(added to the build flags when available) catches a skipped initialiser.
+
+A function that uses `etry` declares `Error eret`, has an `end:` label, and
+returns from exactly one place. Cleanup goes after `end:`. (Snippets elsewhere
+in this guide show bare `etry(...)` lines: they sit inside a function shaped
+like this.)
 
 ```c
 Error load(const char *path, Strings *out) {
-  FILE *f;
-  etry(io_open(&f, path, "r"));
-  Error e = FILE_readLines(f, out);
-  Error c = io_close(f);
-  if (!e.ok) { efree(&c); return e; }
-  return c;
+  Error eret = eok();
+  FILE *f = NULL;                      // declare everything BEFORE the first etry
+  etry(io_open(&f, path, "r"));        // failed: eret = it, goto end
+  etry(FILE_readLines(f, out));
+end:
+  if (f) ejoin(&eret, io_close(f));    // a failing close never hides eret
+  return eret;
 }
 ```
+
+- No `end:` label = compile error. Don't `return` from the middle of such a
+  function (it skips the cleanup); checks *before* you acquire anything may.
+- A `goto` skips initialisers, so put every variable that `end:` uses above
+  the first `etry`.
+
+Defer: register cleanup right after acquiring, run it all at `end:`, newest
+first, only for what was acquired. Pure C11 + a small stack array:
+
+```c
+Error load(const char *path) {
+  Error eret = eok();
+  EDEFERS(3);                          // capacity; before the first etry
+  FILE *f;
+  etry(io_open(&f, path, "r"));
+  edefer(io_close, f);                 // returns Error: joined into eret
+  char *buf = malloc(4096);
+  edefer_void(free, buf);              // returns void
+  edefer_void(array_free0_raw, &words.raw, String_free2);  // any arguments
+  etry(...);
+end:
+  erundefers();
+  return eret;
+}
+```
+
+`edefer(fn, args...)` stores `fn` and up to 6 arguments **now** and calls
+`fn(args...)` at `erundefers()`. The call is type-checked where you write it:
+wrong arity or argument types are compile errors, and `edefer` (not
+`edefer_void`) requires `fn` to return `Error`. Arguments must be integers,
+`bool`, pointers or function pointers (floats, doubles and structs are compile
+errors). `fn` must be a real function, not a macro: for a typed macro API defer
+its `_raw` function or a small wrapper. More defers than `EDEFERS(n)` asserts.
+
+Portability: the stored call goes through a cast function pointer with
+word-sized arguments. The C standard doesn't define that; it works on 64-bit
+x86-64 and aarch64 for the argument kinds above (a static assert rejects
+32-bit targets), and clang's `-fsanitize=function` reports it.
 
 Print one:
 

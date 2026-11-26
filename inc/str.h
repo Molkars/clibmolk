@@ -77,13 +77,13 @@ typedef array_t(String) Strings;
 /// reads every line of `f` into `lines`, without the
 /// trailing `\n` or `\r\n`. A final line with no newline is still included.
 /// returns an error on failure, in which case `lines` is left empty
-Error FILE_readLines(FILE *f, Strings *lines);
+NODISCARD Error FILE_readLines(FILE *f, Strings *lines);
 
 /// reads the whole file at `path` into `out`, replacing its contents. At most
 /// `memmax` bytes are read: a bigger file fails with `EFBIG` (a `memmax` of 0
 /// only accepts an empty file). Works on non-seekable files too. On failure
 /// `out` is left empty. `out` must be a valid String (a zeroed one is fine)
-Error String_readFile(const char *path, size_t memmax, String *out);
+NODISCARD Error String_readFile(const char *path, size_t memmax, String *out);
 
 /// removes leading and trailing whitespace from `s` in place
 void String_trim(String *s);
@@ -91,13 +91,13 @@ void String_trim(String *s);
 /// splits `s` on runs of whitespace and appends each word (a new copy) to
 /// `out`; leading, trailing and repeated whitespace yield no empty words. On
 /// failure `out` is freed and left empty
-Error String_split(const String *s, Strings *out);
+NODISCARD Error String_split(const String *s, Strings *out);
 
 /// splits `s` at each occurrence of the non-empty C string [delim] (an empty
 /// or null [delim] is `EINVAL`) and appends each field (a new copy) to `out`.
 /// Empty fields are kept: `"a,,b"` on `","` gives `"a"`, `""`, `"b"`, and `""`
 /// gives one empty field. On failure `out` is freed and left empty
-Error String_splitOn(const String *s, const char *delim, Strings *out);
+NODISCARD Error String_splitOn(const String *s, const char *delim, Strings *out);
 
 /// splits `s` on runs of whitespace into exactly [nparts] words, written to
 /// `parts[0..nparts)` as new copies. For when the shape is known:
@@ -110,13 +110,13 @@ Error String_splitOn(const String *s, const char *delim, Strings *out);
 /// `parts` are output slots: their old contents are overwritten, not freed. A
 /// different number of words is `EINVAL`. On any failure every slot is left as
 /// `String_empty()`, so there is nothing to free
-Error String_split2(const String *s, String *parts, size_t nparts);
+NODISCARD Error String_split2(const String *s, String *parts, size_t nparts);
 
 /// like `String_split2`, but splits at each occurrence of the non-empty C
 /// string [delim] (an empty [delim] is `EINVAL`). Empty fields are kept:
 /// `"a,,b"` on `","` is `"a"`, `""`, `"b"`, and `""` is one empty field.
 /// Matches don't overlap, scanning left to right
-Error String_splitOn2(const String *s, const char *delim, String *parts,
+NODISCARD Error String_splitOn2(const String *s, const char *delim, String *parts,
                       size_t nparts);
 
 /// true if `s` is non-empty and consists only of ASCII digits `0`-`9`
@@ -126,7 +126,7 @@ int String_isdigits(const String *s);
 /// sign, no spaces, no trailing text, not empty). `dst` is untouched on error.
 /// Fails with `EINVAL` if `s` isn't a number (or `dst` is null) and `ERANGE`
 /// if it doesn't fit in a `size_t`
-Error String_to_sizet(const String *s, size_t *dst);
+NODISCARD Error String_to_sizet(const String *s, size_t *dst);
 
 /// `String_to_<name>(const String *, T *)` for each (T, name) in CSTR_TO_TYPES:
 /// the same strict parsers as `cstr_to_<name>` (decimal, no whitespace, no
@@ -540,33 +540,30 @@ Error String_readFile(const char *path, size_t memmax, String *out) {
   if (!path)
     return enew(EINVAL, "path is null");
 
-  FILE *f;
-  etry(io_open(&f, path, "rb"));
-  Error err = eok();
+  Error eret = eok();
+  Error rerr = eok();
+  FILE *f = NULL;
   char chunk[BUFSIZ];
   size_t nRead, want;
+  etry(io_open(&f, path, "rb"));
   do {
     // ask for one byte past the limit so an oversized file is noticed
     size_t room = memmax - out->len;
     want = room < sizeof chunk ? room + 1 : sizeof chunk;
-    err = io_read(f, chunk, want, &nRead);
+    rerr = io_read(f, chunk, want, &nRead);
     // keep what arrived even if the read then failed
-    if (!String_extend(out, chunk, nRead) && err.ok)
-      err = enew(ENOMEM, "out of memory reading %s", path);
-    if (err.ok && out->len > memmax)
-      err = enew(EFBIG, "%s is larger than %zu bytes", path, memmax);
-  } while (err.ok && nRead == want);
+    if (!String_extend(out, chunk, nRead) && rerr.ok)
+      rerr = enew(ENOMEM, "out of memory reading %s", path);
+    if (rerr.ok && out->len > memmax)
+      rerr = enew(EFBIG, "%s is larger than %zu bytes", path, memmax);
+  } while (rerr.ok && nRead == want);
 
-  Error cerr = io_close(f);
-  if (!err.ok) {
-    efree(&cerr);
+  ejoin(&rerr, io_close(f)); // the read error wins over a close error
+  if (!rerr.ok)
     String_reset(out);
-    etry(err);
-  }
-  if (!cerr.ok)
-    String_reset(out);
-  etry(cerr);
-  return eok();
+  etry(rerr);
+end:
+  return eret;
 }
 
 #endif // MOLKIE_STR_IMPL

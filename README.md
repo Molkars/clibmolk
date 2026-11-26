@@ -64,8 +64,9 @@ program. A module's tests may only use its declared dependencies plus
 that module's include guard.
 
 ```sh
-just test         # deps check, everything at once, each module standalone, user-type formatting, typecheck
+just test         # deps check, lint, everything at once, each module standalone, user-type formatting, typecheck
 just standalone   # each module with only its declared deps
+just lint         # etry/edefer conventions (tools/lint.py, with a self-test)
 ```
 
 ## Releasing

@@ -42,14 +42,14 @@ typedef struct {
 
 /// ensure that [a->len + extra] items can fit in [a].
 /// returns an error if the array can't grow; [a] is unchanged
-Error array_grow_raw(_array_t *a, size_t extra);
+NODISCARD Error array_grow_raw(_array_t *a, size_t extra);
 /// add the element [elem] to [a]. returns an error
-Error array_push_raw(_array_t *a, const void *elem);
+NODISCARD Error array_push_raw(_array_t *a, const void *elem);
 /// add [elems] to the end of [a]. returns an error (also if the element sizes
 /// differ)
-Error array_extend_raw(_array_t *a, const _array_t *elems);
+NODISCARD Error array_extend_raw(_array_t *a, const _array_t *elems);
 /// add [n] elements from [elems] to the end of [a]. returns an error
-Error array_extend2_raw(_array_t *a, const void *elems, size_t n);
+NODISCARD Error array_extend2_raw(_array_t *a, const void *elems, size_t n);
 /// pointer to element [i], or NULL if [i] is out of bounds
 void *array_at_raw(_array_t *a, size_t i);
 /// free the array [a], without calling [free] on elements

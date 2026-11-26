@@ -108,9 +108,9 @@ typedef struct {
 void *btree_get_raw(const _btree_t *bt, const void *key);
 /// insert [key] -> [value], overwriting an existing entry (its old value is
 /// copied to [old] if non-NULL). returns an error if memory runs out; the tree is left exactly as it was
-Error btree_insert_ex_raw(_btree_t *bt, const void *key, const void *value,
+NODISCARD Error btree_insert_ex_raw(_btree_t *bt, const void *key, const void *value,
                          void *old);
-Error btree_insert_raw(_btree_t *bt, const void *key, const void *value);
+NODISCARD Error btree_insert_raw(_btree_t *bt, const void *key, const void *value);
 
 /// returns 1 if [key] is in [bt], 0 otherwise
 int btree_contains_raw(const _btree_t *bt, const void *key);
@@ -121,7 +121,7 @@ int btree_remove_ex_raw(_btree_t *bt, const void *key, void *old);
 /// insert every entry of [other] into [bt], overwriting existing keys.
 /// returns an error if the key or value sizes differ (nothing is
 /// inserted) or if memory runs out (the entries inserted so far stay)
-Error btree_extend_raw(_btree_t *bt, const _btree_t *other);
+NODISCARD Error btree_extend_raw(_btree_t *bt, const _btree_t *other);
 
 /// create an iterator positioned before the first entry of [bt]
 _btree_iter_t btree_iter_raw(const _btree_t *bt);
@@ -134,7 +134,7 @@ void btree_free_raw(_btree_t *bt);
 int btree_strcmp(const void *a, const void *b);
 /// key hooks for `const char *` keys: [btree_str_clone] `strdup`s the string
 /// in slot [src] into slot [dst] (ENOMEM on failure), [btree_str_free] frees it
-Error btree_str_clone(void *dst, const void *src);
+NODISCARD Error btree_str_clone(void *dst, const void *src);
 void btree_str_free(void *slot);
 // --- type-checked API ------------------------------------------------------
 // Every macro takes a pointer to a `btree_t(K, V)`. Keys and values are passed
