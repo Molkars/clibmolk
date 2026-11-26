@@ -366,25 +366,19 @@ Error String_readFile(const char *path, size_t memmax, String *out) {
   FILE *f;
   etry(io_open(&f, path, "rb"));
   Error err = eok();
+  char chunk[BUFSIZ];
   size_t nRead, want;
   do {
     // ask for one byte past the limit so an oversized file is noticed
     size_t room = memmax - out->len;
-    want = room < BUFSIZ ? room + 1 : BUFSIZ;
-    if (!String_grow(out, want)) {
+    want = room < sizeof chunk ? room + 1 : sizeof chunk;
+    err = io_read(f, chunk, want, &nRead);
+    // keep what arrived even if the read then failed
+    if (!String_extend(out, chunk, nRead) && err.ok)
       err = enew(ENOMEM, "out of memory reading %s", path);
-      break;
-    }
-    err = io_read(f, out->buf + out->len, want, &nRead);
-    out->len += nRead; // keep what arrived even if the read failed
-    out->buf[out->len] = 0;
-    if (!err.ok)
-      break;
-    if (out->len > memmax) {
+    if (err.ok && out->len > memmax)
       err = enew(EFBIG, "%s is larger than %zu bytes", path, memmax);
-      break;
-    }
-  } while (nRead == want);
+  } while (err.ok && nRead == want);
 
   Error cerr = io_close(f);
   if (!err.ok) {
