@@ -3,6 +3,8 @@
 Small single-header C modules (C11, POSIX). Copy the files you want, or fetch
 them from a release with the bundled script.
 
+See [GUIDE.md](GUIDE.md) for how to use each module.
+
 ## Using a module
 
 In exactly one `.c` file per module, define its IMPL macro before including:
@@ -34,6 +36,15 @@ dependencies must be defined somewhere in the program too.
 includes). `err` has no idea `Writer` exists; `eprint` lives in `writer.h`.
 
 ## Fetching
+
+Get the script (Python 3 only):
+
+```sh
+curl -fsSLO https://raw.githubusercontent.com/Molkars/clibmolk/main/clibmolk
+chmod +x clibmolk
+```
+
+Then:
 
 ```sh
 ./clibmolk download array.h v0.1.0            # + err.h, attr.h

@@ -173,10 +173,20 @@ btree_free(&t);
   where `int cmp(const void *a, const void *b)` gets pointers to keys.
 - `_ex` variants (`btree_insert_ex`, `btree_remove_ex`) hand back the old value
   (`V *`, or `NULL` to ignore).
-- String keys: only the **pointer** is stored. The string must outlive the
-  tree. Use `String_cstr` of something you keep, or literals.
-- Don't modify the tree while iterating. `btree_extend(&a, &b)` merges.
-- `btree_free` frees the tree, not anything your values point to.
+- **Key ownership.** `btree_str_t` trees own their strings: insert copies
+  (`strdup`), so free or reuse yours right after. Remove and `btree_free` free
+  the tree's copy. `*it.item` points at the tree's copy; valid until that key is
+  removed.
+- Other `K` are plain byte copies, so a pointer key is only borrowed and must
+  outlive the tree. To own it, give clone/free hooks:
+  `btree_empty_own(K, V, cmp, clone, free)`.
+  `Error clone(void *dst, const void *src)` deep-copies the key slot (leave
+  nothing allocated on error); `void free(void *slot)` releases what the key
+  owns. Set both or neither.
+- Values are always plain byte copies; the tree never frees what they point to.
+- Don't modify the tree while iterating. `btree_extend(&a, &b)` merges (clones
+  keys too).
+- `btree_free` frees the tree and the keys it owns.
 
 ## cstr.h — C-string helpers
 
@@ -258,6 +268,7 @@ The libs' own tests live in the headers behind `MTEST` (all) or
 - Forgot `Writer_init()` before using `stdoutW` / `stderrW`.
 - `eprint` not found: include `writer.h`.
 - Swallowed an `Error` without `efree`: leaks its ctx chain.
-- Stored a `btree` string key that was freed later: dangling.
+- Non-string `btree` pointer keys without `btree_empty_own`: borrowed, so
+  they dangle if freed before the tree.
 - Used an `array_at` pointer after a push: it may have moved.
 - Passed a value instead of a pointer to `array_push` / `btree_insert`.
