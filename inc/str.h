@@ -8,6 +8,7 @@
 #include "array.h"
 #include "attr.h"
 #include "err.h"
+#include "io.h"
 
 /// Growable heap string.
 /// Invariant: if `buf` is non-null it is always NUL-terminated and
@@ -68,6 +69,12 @@ typedef array_t(String) Strings;
 /// trailing `\n` or `\r\n`. A final line with no newline is still included.
 /// returns an error on failure, in which case `lines` is left empty
 Error FILE_readLines(FILE *f, Strings *lines);
+
+/// reads the whole file at `path` into `out`, replacing its contents. At most
+/// `memmax` bytes are read: a bigger file fails with `EFBIG` (a `memmax` of 0
+/// only accepts an empty file). Works on non-seekable files too. On failure
+/// `out` is left empty. `out` must be a valid String (a zeroed one is fine)
+Error String_readFile(const char *path, size_t memmax, String *out);
 
 /// removes leading and trailing whitespace from `s` in place
 void String_trim(String *s);
@@ -349,6 +356,48 @@ fail:
   return e;
 }
 
+Error String_readFile(const char *path, size_t memmax, String *out) {
+  if (!out)
+    return enew(EINVAL, "out is null");
+  String_reset(out);
+  if (!path)
+    return enew(EINVAL, "path is null");
+
+  FILE *f;
+  etry(io_open(&f, path, "rb"));
+  Error err = eok();
+  size_t nRead, want;
+  do {
+    // ask for one byte past the limit so an oversized file is noticed
+    size_t room = memmax - out->len;
+    want = room < BUFSIZ ? room + 1 : BUFSIZ;
+    if (!String_grow(out, want)) {
+      err = enew(ENOMEM, "out of memory reading %s", path);
+      break;
+    }
+    err = io_read(f, out->buf + out->len, want, &nRead);
+    out->len += nRead; // keep what arrived even if the read failed
+    out->buf[out->len] = 0;
+    if (!err.ok)
+      break;
+    if (out->len > memmax) {
+      err = enew(EFBIG, "%s is larger than %zu bytes", path, memmax);
+      break;
+    }
+  } while (nRead == want);
+
+  Error cerr = io_close(f);
+  if (!err.ok) {
+    efree(&cerr);
+    String_reset(out);
+    etry(err);
+  }
+  if (!cerr.ok)
+    String_reset(out);
+  etry(cerr);
+  return eok();
+}
+
 #endif // MOLKIE_STR_IMPL
 
 // Tests: compiled where MTEST (all modules) or MOLKIE_STR_TEST (just this one)
@@ -359,6 +408,7 @@ fail:
 #include <errno.h>
 #include <stdint.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "test.h"
 
@@ -527,8 +577,76 @@ static void str_grow_overflow(void) {
   String_free(&s);
 }
 
+// writes [n] bytes of a repeating pattern to a fresh temp file
+static void str_mkfile(char *path, size_t n) {
+  int fd = mkstemp(path);
+  assert(fd >= 0);
+  FILE *f = fdopen(fd, "w");
+  assert(f);
+  for (size_t i = 0; i < n; i++)
+    fputc('a' + (int)(i % 26), f);
+  assert(fclose(f) == 0);
+}
+
+static void str_readfile(void) {
+  size_t sizes[] = {0, 1, 10, BUFSIZ - 1, BUFSIZ, BUFSIZ + 1, BUFSIZ * 3 + 17};
+  for (size_t k = 0; k < sizeof sizes / sizeof *sizes; k++) {
+    size_t n = sizes[k];
+    char path[] = "/tmp/str_rf_XXXXXX";
+    str_mkfile(path, n);
+    String s = String_fromc("stale"); // contents are replaced
+    Error e = String_readFile(path, n, &s); // exactly at the limit
+    remove(path);
+    assert(e.ok);
+    ASSERT_EQ(s.len, n);
+    for (size_t i = 0; i < n; i++)
+      assert(s.buf[i] == 'a' + (int)(i % 26));
+    assert(n == 0 || s.buf[n] == 0);
+    String_free(&s);
+  }
+}
+
+static void str_readfile_too_big(void) {
+  size_t sizes[] = {1, BUFSIZ, BUFSIZ * 2 + 5};
+  for (size_t k = 0; k < sizeof sizes / sizeof *sizes; k++) {
+    char path[] = "/tmp/str_rf_XXXXXX";
+    str_mkfile(path, sizes[k]);
+    String s = String_fromc("stale");
+    Error e = String_readFile(path, sizes[k] - 1, &s);
+    remove(path);
+    assert(!e.ok);
+    ASSERT_EQ(e.code, EFBIG);
+    efree(&e);
+    assert(s.len == 0 && String_eq(&s, ""));
+    String_free(&s);
+  }
+}
+
+static void str_readfile_errors(void) {
+  String s = String_empty();
+  Error e = String_readFile("/nonexistent/x", 10, &s);
+  ASSERT_EQ(e.code, ENOENT);
+  efree(&e);
+  e = String_readFile(NULL, 10, &s);
+  ASSERT_EQ(e.code, EINVAL);
+  e = String_readFile("/dev/null", 10, NULL);
+  ASSERT_EQ(e.code, EINVAL);
+  e = String_readFile("/tmp", 10, &s);
+  ASSERT_EQ(e.code, EISDIR);
+  efree(&e);
+  // a stream with no end hits the limit instead of eating memory
+  e = String_readFile("/dev/zero", 100000, &s);
+  ASSERT_EQ(e.code, EFBIG);
+  efree(&e);
+  ASSERT_EQ(s.len, 0);
+  String_free(&s);
+}
+
 static int str_tests(void) {
   static const TestCase tests[] = {
+      T(str_readfile),
+      T(str_readfile_too_big),
+      T(str_readfile_errors),
       T(str_readlines),
       T(str_readlines_nul),
       T(str_readlines_crlf_boundary),

@@ -7,5 +7,5 @@
   "array": ["err"],
   "btree": ["err"],
   "cstr": ["attr", "err"],
-  "str": ["array", "attr", "cstr", "err"]
+  "str": ["array", "attr", "cstr", "err", "io"]
 }

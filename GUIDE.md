@@ -25,7 +25,7 @@ somewhere in the program (deps: see `README.md` table). Missing one = link error
 | array   | ERR, ARRAY |
 | btree   | ERR, BTREE |
 | cstr    | ERR, CSTR |
-| str     | ERR, ARRAY, CSTR, STR |
+| str     | ERR, ARRAY, CSTR, IO, STR |
 
 Build flags: `-std=c11 -D_POSIX_C_SOURCE=200809L -Iinc`. GNU `__typeof__`
 needed (gcc/clang).
@@ -237,6 +237,14 @@ array_free0(&words, String_free2);     // frees each String, then the array
 
 size_t n;
 etry(String_to_sizet(&word, &n));      // String_isdigits() to pre-check
+```
+
+Read a whole file (replaces `str`; bigger than `memmax` bytes is `EFBIG`,
+and `str` is left empty on any failure):
+
+```c
+String str = String_empty();
+etry(String_readFile("in.txt", 1 << 20, &str));
 ```
 
 Read a file by lines (no trailing `\n`/`\r\n`):
