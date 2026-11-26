@@ -13,7 +13,10 @@ typedef struct {
 
 #define MOLKIE_ERR_IMPL
 #define MOLKIE_IO_IMPL
-#include "io.h"
+#define MOLKIE_ARRAY_IMPL
+#define MOLKIE_CSTR_IMPL
+#define MOLKIE_STR_IMPL
+#include "str.h" // brings its own String formatter along with the user's
 
 IO_FORMAT_DEFINE(Vec2)
 IO_FORMAT_DEFINE(Seg)
@@ -45,5 +48,8 @@ int main(void) {
   CHECK("at (1, -2)", "at {}", cp);
   CHECK("(0, 0) -> (3, 4)", "{}", &s);
   CHECK("n=7 (1, -2) x", "n={} {} {}", 7, &p, "x");
+  String name = String_fromc("bob");
+  CHECK("bob (1, -2)", "{} {}", &name, &p);
+  String_free(&name);
   return 0;
 }

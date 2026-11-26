@@ -283,6 +283,11 @@ static inline FormatArg io_arg_ldouble(long double v) {
     return (FormatArg){.fn = io_adapt_##T, .byptr = true, .ptr = p};           \
   }
 
+/// Hooks for other modules, so including them is enough to make their types
+/// formattable (str.h redefines IO_FORMAT_EXT_STR to `X(String)`). Not for
+/// users: list your own types in IO_FORMAT_TYPES
+#define IO_FORMAT_EXT_STR(X)
+
 /// The user's types: `#define IO_FORMAT_TYPES(X) X(A) X(B)`. Must be defined
 /// before this header is included
 #ifndef IO_FORMAT_TYPES
@@ -300,6 +305,7 @@ struct io_no_format_; // never matches; ends the _Generic list
       char *: io_arg_charptr,                                                  \
       void *: io_arg_voidptr,                                                  \
       IO_FORMAT_TYPES(IO_USER_ASSOC_)                                          \
+      IO_FORMAT_EXT_STR(IO_USER_ASSOC_)                                        \
       struct io_no_format_ *: io_arg_Bool)(x)
 
 #define IO_MAP_1(m, a) m(a)

@@ -29,6 +29,14 @@ String String_from(const char *src, size_t n);
 /// copies the C string `src` into a new string. `buf` is null on alloc failure
 String String_fromc(const char *src);
 
+// `{}` formatting: pass a String by address, `io_fprint(w, "{:>8}", &s)`. It
+// takes the same specs as a `char *` (width, fill, align, `.N` to truncate).
+// Don't also list String in IO_FORMAT_TYPES. Contents are printed up to the
+// first NUL.
+#undef IO_FORMAT_EXT_STR
+#define IO_FORMAT_EXT_STR(X) X(String)
+IO_FORMAT_DEFINE(String)
+
 /// the contents as a C string. never null, even for an empty String
 const char *String_cstr(const String *s);
 
@@ -119,6 +127,11 @@ String String_from(const char *src, size_t n) {
 String String_fromc(const char *src) {
   assert(src && "src is null");
   return String_from(src, strlen(src));
+}
+
+Error String_format(Writer w, const String *s, FormatSpec spec) {
+  const char *c = String_cstr(s);
+  return charptr_format(w, &c, spec);
 }
 
 const char *String_cstr(const String *s) {
@@ -406,6 +419,18 @@ Error String_readFile(const char *path, size_t memmax, String *out) {
 
 #include "test.h"
 
+static void str_format(void) {
+  char b[64];
+  Scratch sc = Scratch_init(b, sizeof b);
+  String s = String_fromc("héllo");
+  String e = String_empty();
+  assert(io_fprint(Scratch_writer(&sc), "[{}] [{:>7}] [{:.2}] [{}] {}", &s, &s,
+                   &s, &e, 5)
+             .ok);
+  assert(!strcmp(b, "[héllo] [  héllo] [hé] [] 5"));
+  String_free(&s);
+}
+
 static void str_eq(void) {
   String s = String_fromc("abc");
   assert(String_eq(&s, "abc"));
@@ -646,6 +671,7 @@ static int str_tests(void) {
       T(str_readlines_crlf_boundary),
       T(str_self_append),
       T(str_grow_overflow),
+      T(str_format),
       T(str_eq),        T(str_trim),
       T(str_split),     T(str_isdigits),
       T(str_to_sizet),  T(str_to_sizet_errors),

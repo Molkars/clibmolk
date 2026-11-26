@@ -184,7 +184,7 @@ Formatters may be used directly: `int_format(w, &v, (FormatSpec){.width = 5})`
 under `io_fprint`: it expands to `fmt, args, count`, the last three arguments of
 `io_format(w, ...)`.
 
-To print a `String`, pass `String_cstr(&s)`.
+Including `str.h` makes `String` formattable too, by address (`io_fprint(w, "{:>8}", &s)`); don't list it in `IO_FORMAT_TYPES` yourself.
 
 ## array.h — typed growable array
 
