@@ -25,15 +25,14 @@ dependencies must be defined somewhere in the program too.
 | `attr.h`   | –                        | `PRINTF_LIKE`                           |
 | `test.h`   | –                        | tiny fork-per-test runner, `ASSERT_EQ`  |
 | `err.h`    | attr                     | `Error`, `enew`, `etry`, `efprint`, ... |
-| `writer.h` | attr, err                | `Writer`, `Scratch`, `eprint`           |
-| `io.h`     | err                      | EINTR-safe `FILE*` helpers              |
+| `io.h`     | attr, err                | EINTR-safe `FILE*` helpers, `Writer`, `Reader`, `{}` formatting (`io_fprint`) |
 | `array.h`  | err                      | typed growable array                    |
 | `btree.h`  | err                      | typed B-tree map; `btree_str_t` owns its keys |
 | `cstr.h`   | attr, err                | C-string helpers                        |
 | `str.h`    | array, attr, cstr, err, io | growable `String`                       |
 
 `deps.json` is the source of truth (`just deps` checks it against the
-includes). `err` has no idea `Writer` exists: `efprint` (plain `FILE *`) is in `err.h`, `eprint` (`Writer`) is in `writer.h`.
+includes). `err` has no idea `Writer` exists: `efprint` (plain `FILE *`) is in `err.h`, `eprint` (`Writer`) is in `io.h`.
 
 ## Fetching
 
@@ -61,12 +60,11 @@ that differ are left alone unless `--force`. Needs only Python 3.
 Tests live in each header, behind `MTEST` (all modules) or
 `MOLKIE_<NAME>_TEST` (one module), and need the module's IMPL in the same
 program. A module's tests may only use its declared dependencies plus
-`test.h`. Anything needing another module is an *extension* guarded on that
-module's include guard, e.g. `io.h` prints full error chains in failing tests
-when `writer.h` was included first.
+`test.h`. Anything needing another module would be an *extension* guarded on
+that module's include guard.
 
 ```sh
-just test         # deps check, everything at once, each module standalone, typecheck
+just test         # deps check, everything at once, each module standalone, user-type formatting, typecheck
 just standalone   # each module with only its declared deps
 ```
 

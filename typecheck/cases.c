@@ -6,6 +6,7 @@
 #include "array.h"
 #include "btree.h"
 #include "err.h"
+#include "io.h"
 
 typedef array_t(int) Ints;
 typedef array_t(double) Doubles;
@@ -54,6 +55,10 @@ void good(void) {
   }
   btree_free(&ages);
   btree_free(&other);
+
+  Error e = io_fprint(stdoutW, "{} {:>4} {}", 1, 2.5, "x");
+  e = io_fprint(stdoutW, "plain");
+  (void)e;
 }
 
 #ifdef BAD_ARRAY_PUSH_WRONG_TYPE
@@ -182,5 +187,26 @@ void bad(void) {
   Ints a = array_empty(int);
   int k = 0;
   btree_get(&a, &k);
+}
+#endif
+
+#ifdef BAD_FMT_STRUCT_BY_VALUE
+void bad(void) {
+  Ints a = array_empty(int);
+  io_fprint(stdoutW, "{}", a); // user types go by address, and must be listed
+}
+#endif
+
+#ifdef BAD_FMT_UNLISTED_POINTER
+void bad(void) {
+  int i = 0;
+  io_fprint(stdoutW, "{}", &i); // `int *` is not a formattable type
+}
+#endif
+
+#ifdef BAD_FMT_WRITER_BY_POINTER
+void bad(void) {
+  Writer w = stdoutW;
+  io_fprint(&w, "x"); // writers are passed by value
 }
 #endif

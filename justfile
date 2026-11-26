@@ -4,7 +4,7 @@ cflags := "-std=c11 -D_POSIX_C_SOURCE=200809L -Wall -Wextra -Wpedantic -Wformat=
 default: test
 
 # everything: deps check, all modules at once, each module standalone, typecheck
-test: deps all asan standalone typecheck
+test: deps all asan standalone fmt-user typecheck
 
 # deps.json matches what the headers include
 deps:
@@ -28,7 +28,14 @@ asan:
 standalone:
   python3 tools/standalone.py
 
-# compile-time checks for the typed array/btree API: the good code must
+# io.h formatting of user types (needs IO_FORMAT_TYPES before the include)
+fmt-user:
+  mkdir -p dist
+  {{cc}} {{cflags}} -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=undefined -o dist/.fmt_user tests/fmt_user.c
+  dist/.fmt_user
+  @echo "fmt-user: ok"
+
+# compile-time checks for the typed array/btree/format API: the good code must
 # compile and every BAD_* case in typecheck/cases.c must be rejected
 typecheck:
   #!/usr/bin/env bash

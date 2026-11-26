@@ -29,7 +29,7 @@ struct ErrCtx {
 ///
 /// Error e = read_thing(p);
 /// if (!e.ok)
-///   efprint(&e, stderr); // or eprint(&e, &stderrW), from writer.h
+///   efprint(&e, stderr); // or eprint(&e, stderrW), from io.h
 /// ```
 typedef struct {
   bool ok;
@@ -90,7 +90,7 @@ bool etry_check_(Error *e, const char *file, int line);
 /// writes `error: <ctx>: ...: <ctx>: <msg>\n` (newest context first, then the
 /// original message) to the stdio stream [f]; writes nothing if [e] is ok.
 /// Returns the write's own error, if any. Does not free [e]. For a `Writer`
-/// (buffers, custom sinks) use `eprint` from writer.h
+/// (buffers, custom sinks) use `eprint` from io.h
 Error efprint(const Error *e, FILE *f);
 
 #endif // MOLKIE_ERR_H
@@ -189,7 +189,7 @@ Error efprint(const Error *e, FILE *f) {
 
 // Tests: compiled where MTEST (all modules) or MOLKIE_ERR_TEST (just this one)
 // is defined. Needs MOLKIE_ERR_IMPL in the
-// same program. Printing the error chain is tested in writer.h.
+// same program. Printing the error chain with `eprint` is tested in io.h.
 #if (defined(MTEST) || defined(MOLKIE_ERR_TEST)) && !defined(MOLKIE_ERR_TESTS)
 #define MOLKIE_ERR_TESTS
 #include <errno.h>
