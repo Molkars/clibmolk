@@ -92,6 +92,32 @@ void String_trim(String *s);
 /// failure `out` is freed and left empty
 Error String_split(const String *s, Strings *out);
 
+/// splits `s` at each occurrence of the non-empty C string [delim] (an empty
+/// or null [delim] is `EINVAL`) and appends each field (a new copy) to `out`.
+/// Empty fields are kept: `"a,,b"` on `","` gives `"a"`, `""`, `"b"`, and `""`
+/// gives one empty field. On failure `out` is freed and left empty
+Error String_splitOn(const String *s, const char *delim, Strings *out);
+
+/// splits `s` on runs of whitespace into exactly [nparts] words, written to
+/// `parts[0..nparts)` as new copies. For when the shape is known:
+/// ```
+/// String kv[2];
+/// etry(String_split2(&line, kv, 2));   // "name  bob" -> "name", "bob"
+/// ...
+/// String_free(&kv[0]); String_free(&kv[1]);
+/// ```
+/// `parts` are output slots: their old contents are overwritten, not freed. A
+/// different number of words is `EINVAL`. On any failure every slot is left as
+/// `String_empty()`, so there is nothing to free
+Error String_split2(const String *s, String *parts, size_t nparts);
+
+/// like `String_split2`, but splits at each occurrence of the non-empty C
+/// string [delim] (an empty [delim] is `EINVAL`). Empty fields are kept:
+/// `"a,,b"` on `","` is `"a"`, `""`, `"b"`, and `""` is one empty field.
+/// Matches don't overlap, scanning left to right
+Error String_splitOn2(const String *s, const char *delim, String *parts,
+                      size_t nparts);
+
 /// true if `s` is non-empty and consists only of ASCII digits `0`-`9`
 int String_isdigits(const String *s);
 
@@ -312,6 +338,116 @@ Error String_split(const String *s, Strings *out) {
   return eok();
 }
 
+// Iterates the fields of `s`: on runs of whitespace (dlen == 0) or on `delim`.
+typedef struct {
+  const char *p, *end;
+  const char *delim;
+  size_t dlen;
+  int done;
+} _SplitIter;
+
+// next field into [*tok, *n]; 0 when there are no more
+static int _splitNext(_SplitIter *it, const char **tok, size_t *n) {
+  if (it->done)
+    return 0;
+  if (!it->dlen) {
+    while (it->p < it->end && _isws(*it->p))
+      it->p++;
+    if (it->p == it->end)
+      return it->done = 1, 0;
+    *tok = it->p;
+    while (it->p < it->end && !_isws(*it->p))
+      it->p++;
+    *n = (size_t)(it->p - *tok);
+    return 1;
+  }
+  *tok = it->p;
+  const char *q = it->p;
+  while ((size_t)(it->end - q) >= it->dlen &&
+         !(*q == *it->delim && !memcmp(q, it->delim, it->dlen)))
+    q++;
+  if ((size_t)(it->end - q) < it->dlen) { // no more delimiters: the last field
+    *n = (size_t)(it->end - it->p);
+    it->done = 1;
+  } else {
+    *n = (size_t)(q - it->p);
+    it->p = q + it->dlen;
+  }
+  return 1;
+}
+
+static Error _splitFixed(const String *s, const char *delim, String *parts,
+                         size_t nparts) {
+  size_t dlen = delim ? strlen(delim) : 0;
+  if (!s)
+    return enew(EINVAL, "string is null");
+  if (!parts && nparts)
+    return enew(EINVAL, "parts is null");
+  if (delim && !dlen)
+    return enew(EINVAL, "delimiter is empty");
+  for (size_t i = 0; i < nparts; i++)
+    parts[i] = String_empty();
+
+  const char *base = String_cstr(s);
+  const char *tok;
+  size_t n, count = 0;
+  _SplitIter it = {base, base + s->len, delim, dlen, 0};
+  while (_splitNext(&it, &tok, &n))
+    count++;
+  if (count != nparts)
+    return enew(EINVAL, "expected %zu parts, found %zu", nparts, count);
+
+  it = (_SplitIter){base, base + s->len, delim, dlen, 0};
+  for (size_t i = 0; _splitNext(&it, &tok, &n); i++) {
+    parts[i] = String_from(tok, n);
+    if (!parts[i].buf && n) { // empty fields may legitimately have no buf
+      for (size_t j = 0; j < i; j++)
+        String_free(&parts[j]);
+      for (size_t j = 0; j < nparts; j++)
+        parts[j] = String_empty();
+      return enew(ENOMEM, "out of memory splitting string");
+    }
+  }
+  return eok();
+}
+
+Error String_splitOn(const String *s, const char *delim, Strings *out) {
+  assert(out && "out is null");
+  if (!s)
+    return enew(EINVAL, "string is null");
+  if (!delim || !*delim)
+    return enew(EINVAL, "delimiter is null or empty");
+
+  const char *base = String_cstr(s), *tok;
+  size_t n;
+  _SplitIter it = {base, base + s->len, delim, strlen(delim), 0};
+  while (_splitNext(&it, &tok, &n)) {
+    String part = String_from(tok, n);
+    if (!part.buf && n) {
+      array_free0(out, String_free2);
+      return enew(ENOMEM, "out of memory splitting string");
+    }
+    Error e = array_push(out, &part);
+    if (!e.ok) {
+      String_free(&part);
+      array_free0(out, String_free2);
+      return e;
+    }
+  }
+  return eok();
+}
+
+Error String_split2(const String *s, String *parts, size_t nparts) {
+  return _splitFixed(s, NULL, parts, nparts);
+}
+
+Error String_splitOn2(const String *s, const char *delim, String *parts,
+                      size_t nparts) {
+  if (!delim)
+    return enew(EINVAL, "delimiter is null");
+  return _splitFixed(s, delim, parts, nparts);
+}
+
 // moves `*line` into `lines`. on success `*line` is reset to empty
 static Error _pushLine(Strings *lines, String *line) {
   Error e = array_push(lines, line);
@@ -468,6 +604,90 @@ static void str_split(void) {
   array_free0(&w, String_free2);
   String_free(&s);
   String_free(&none);
+}
+
+static void str_split_on(void) {
+  String s = String_fromc("a,,b,");
+  Strings w = array_empty(String);
+  assert(String_splitOn(&s, ",", &w).ok);
+  ASSERT_EQ(w.len, 4);
+  assert(String_eq(&w.elements[0], "a") && String_eq(&w.elements[1], "") &&
+         String_eq(&w.elements[2], "b") && String_eq(&w.elements[3], ""));
+  assert(String_splitOn(&s, ",", &w).ok); // appends
+  ASSERT_EQ(w.len, 8);
+  array_free0(&w, String_free2);
+
+  String m = String_fromc("k=v, x=y");
+  assert(String_splitOn(&m, ", ", &w).ok);
+  ASSERT_EQ(w.len, 2);
+  assert(String_eq(&w.elements[1], "x=y"));
+  array_free0(&w, String_free2);
+
+  String none = String_empty();
+  assert(String_splitOn(&none, ",", &w).ok);
+  ASSERT_EQ(w.len, 1); // one empty field
+  array_free0(&w, String_free2);
+
+  assert(String_splitOn(&s, "", &w).code == EINVAL);
+  assert(String_splitOn(&s, NULL, &w).code == EINVAL);
+  ASSERT_EQ(w.len, 0);
+  String_free(&s);
+  String_free(&m);
+}
+
+static void str_split2(void) {
+  String s = String_fromc("  name \t bob\n");
+  String kv[2];
+  assert(String_split2(&s, kv, 2).ok);
+  assert(String_eq(&kv[0], "name") && String_eq(&kv[1], "bob"));
+  String_free(&kv[0]);
+  String_free(&kv[1]);
+
+  Error e = String_split2(&s, kv, 3); // wrong count: EINVAL, slots left empty
+  assert(!e.ok);
+  ASSERT_EQ(e.code, EINVAL);
+  assert(!kv[0].buf && !kv[1].buf);
+  assert(!String_split2(&s, kv, 1).ok);
+
+  String blank = String_fromc(" \t ");
+  assert(String_split2(&blank, NULL, 0).ok); // zero words, zero slots
+  assert(!String_split2(&blank, kv, 1).ok);
+  assert(String_split2(&s, NULL, 2).code == EINVAL);
+  String_free(&s);
+  String_free(&blank);
+}
+
+static void str_split_on2(void) {
+  String s = String_fromc("a,,b,");
+  String p[4];
+  assert(String_splitOn2(&s, ",", p, 4).ok);
+  assert(String_eq(&p[0], "a") && String_eq(&p[1], "") &&
+         String_eq(&p[2], "b") && String_eq(&p[3], ""));
+  for (int i = 0; i < 4; i++)
+    String_free(&p[i]);
+  assert(!String_splitOn2(&s, ",", p, 3).ok);
+
+  String m = String_fromc("k=v, x=y");
+  assert(String_splitOn2(&m, ", ", p, 2).ok); // multi-byte delimiter
+  assert(String_eq(&p[0], "k=v") && String_eq(&p[1], "x=y"));
+  String_free(&p[0]);
+  String_free(&p[1]);
+
+  String ov = String_fromc("aaa"); // matches don't overlap
+  assert(String_splitOn2(&ov, "aa", p, 2).ok);
+  assert(String_eq(&p[0], "") && String_eq(&p[1], "a"));
+  String_free(&p[1]);
+
+  String none = String_empty(); // one empty field
+  assert(String_splitOn2(&none, ",", p, 1).ok);
+  assert(String_eq(&p[0], ""));
+  assert(!String_splitOn2(&none, ",", p, 0).ok);
+
+  assert(String_splitOn2(&s, "", p, 1).code == EINVAL);
+  assert(String_splitOn2(&s, NULL, p, 1).code == EINVAL);
+  String_free(&s);
+  String_free(&m);
+  String_free(&ov);
 }
 
 static void str_isdigits(void) {
@@ -673,7 +893,9 @@ static int str_tests(void) {
       T(str_grow_overflow),
       T(str_format),
       T(str_eq),        T(str_trim),
-      T(str_split),     T(str_isdigits),
+      T(str_split),     T(str_split2),
+      T(str_split_on),
+      T(str_split_on2), T(str_isdigits),
       T(str_to_sizet),  T(str_to_sizet_errors),
   };
   size_t n = sizeof tests / sizeof *tests, passed = 0;

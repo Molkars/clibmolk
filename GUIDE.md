@@ -287,8 +287,21 @@ Parse/split:
 ```c
 Strings words = array_empty(String);   // Strings = array_t(String)
 etry(String_split(&s, &words));        // on whitespace, new copies
+etry(String_splitOn(&s, ",", &words)); // on a delimiter string, keeps empty fields
 array_free0(&words, String_free2);     // frees each String, then the array
 
+// known shape: exactly N parts into a C array (EINVAL if the count differs)
+String kv[2];
+etry(String_split2(&line, kv, 2));           // whitespace
+etry(String_splitOn2(&line, "=", kv, 2));    // any non-empty delimiter string
+String_free(&kv[0]); String_free(&kv[1]);
+```
+
+`String_splitOn2` keeps empty fields (`"a,,b"` -> 3). On failure every slot is
+`String_empty()`, so nothing to free; the slots' old contents are overwritten,
+not freed.
+
+```c
 size_t n;
 etry(String_to_sizet(&word, &n));      // String_isdigits() to pre-check
 ```
