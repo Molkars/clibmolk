@@ -68,12 +68,15 @@ Error load(const char *path, Strings *out) {
 }
 ```
 
-Print one (needs `writer.h`):
+Print one:
 
 ```c
-if (!e.ok) { eprint(&e, &stderrW); efree(&e); }
+if (!e.ok) { efprint(&e, stderr); efree(&e); }     // any FILE*, err.h only
+if (!e.ok) { eprint(&e, &stderrW); efree(&e); }    // any Writer, needs writer.h
 // error: <newest ctx>: ...: <msg>
 ```
+
+Both return an `Error` for the write itself; neither frees `e`.
 
 ## writer.h — output sink
 
@@ -266,7 +269,8 @@ The libs' own tests live in the headers behind `MTEST` (all) or
 
 - Forgot an IMPL (own or dep): undefined reference at link.
 - Forgot `Writer_init()` before using `stdoutW` / `stderrW`.
-- `eprint` not found: include `writer.h`.
+- `eprint` not found: it takes a `Writer` and needs `writer.h`. For a `FILE *`
+  use `efprint` (`err.h`).
 - Swallowed an `Error` without `efree`: leaks its ctx chain.
 - Non-string `btree` pointer keys without `btree_empty_own`: borrowed, so
   they dangle if freed before the tree.

@@ -2,6 +2,7 @@
 #define MOLKIE_ERR_H
 
 #include <stdbool.h>
+#include <stdio.h>
 
 #include "attr.h"
 
@@ -28,7 +29,7 @@ struct ErrCtx {
 ///
 /// Error e = read_thing(p);
 /// if (!e.ok)
-///   eprint(&e, &stderrW); // eprint comes with writer.h
+///   efprint(&e, stderr); // or eprint(&e, &stderrW), from writer.h
 /// ```
 typedef struct {
   bool ok;
@@ -85,6 +86,12 @@ void efree(Error *e);
 /// used by [etry]: true if [e] failed, after adding `file:line` as context.
 /// Note [etry] allocates, which may clobber `errno`: read `e.code` instead
 bool etry_check_(Error *e, const char *file, int line);
+
+/// writes `error: <ctx>: ...: <ctx>: <msg>\n` (newest context first, then the
+/// original message) to the stdio stream [f]; writes nothing if [e] is ok.
+/// Returns the write's own error, if any. Does not free [e]. For a `Writer`
+/// (buffers, custom sinks) use `eprint` from writer.h
+Error efprint(const Error *e, FILE *f);
 
 #endif // MOLKIE_ERR_H
 
@@ -162,6 +169,21 @@ bool etry_check_(Error *e, const char *file, int line) {
     return false;
   ectx(e, "%s:%d", file, line);
   return true;
+}
+
+Error efprint(const Error *e, FILE *f) {
+  if (e->ok)
+    return eok();
+  if (!f)
+    return enew(EINVAL, "file is null");
+  if (fputs("error: ", f) == EOF)
+    return eerrno("unable to write error");
+  for (const ErrCtx *c = e->ctx; c; c = c->next)
+    if (fprintf(f, "%s: ", c->msg) < 0)
+      return eerrno("unable to write error");
+  if (fprintf(f, "%s\n", e->msg) < 0)
+    return eerrno("unable to write error");
+  return eok();
 }
 #endif // MOLKIE_ERR_IMPL
 
@@ -266,10 +288,31 @@ static void err_try(void) {
   efree(&e);
 }
 
+static void err_fprint(void) {
+  FILE *f = tmpfile();
+  assert(f);
+  Error ok = eok();
+  assert(efprint(&ok, f).ok);
+  Error e = enew(2, "boom");
+  ectx(&e, "reading %s", "a.txt");
+  ectx(&e, "step %d", 2);
+  assert(efprint(&e, f).ok);
+  efree(&e);
+  rewind(f);
+  char line[64] = {0};
+  assert(fgets(line, sizeof line, f));
+  assert(!strcmp(line, "error: step 2: reading a.txt: boom\n"));
+  assert(!fgets(line, sizeof line, f)); // nothing for the ok error
+  fclose(f);
+
+  Error bad = enew(1, "x");
+  assert(efprint(&bad, NULL).code == EINVAL);
+}
+
 static int err_tests(void) {
   static const TestCase tests[] = {
       T(err_ok),  T(err_new), T(err_errno),
-      T(err_truncate), T(err_errno_truncate), T(err_ctx), T(err_try),
+      T(err_truncate), T(err_errno_truncate), T(err_ctx), T(err_try), T(err_fprint),
   };
   size_t n = sizeof tests / sizeof *tests, passed = 0;
   for (size_t i = 0; i < n; i++)

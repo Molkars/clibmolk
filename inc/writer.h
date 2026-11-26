@@ -56,8 +56,8 @@ extern Writer stderrW;
 
 /// writes `error: <ctx>: ...: <ctx>: <msg>\n` (newest context first, then the
 /// original message) to [w]; writes nothing if [e] is ok. Returns the writer's
-/// own error, if it has one. This is the one place err and writer meet: err.h
-/// has no Writer, writer.h owns `eprint`
+/// own error, if it has one. err.h has no Writer; for a plain `FILE *` use
+/// `efprint` from err.h
 Error eprint(Error *e, Writer *w);
 
 #endif // MOLKIE_WRITER_H

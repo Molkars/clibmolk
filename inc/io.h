@@ -160,9 +160,6 @@ Error io_forward(FILE *dst, FILE *src) {
 // Tests: compiled where MTEST (all modules) or MOLKIE_IO_TEST (just this one)
 // is defined. Needs MOLKIE_IO_IMPL and
 // MOLKIE_ERR_IMPL in the same program.
-//
-// Extension: if writer.h was included first, a failing test prints the full
-// error chain through [eprint]; without it, just the message.
 #if (defined(MTEST) || defined(MOLKIE_IO_TEST)) && !defined(MOLKIE_IO_TESTS)
 #define MOLKIE_IO_TESTS
 #include <stdlib.h>
@@ -172,12 +169,7 @@ Error io_forward(FILE *dst, FILE *src) {
 #include "test.h"
 
 static void io_test_report(Error *e) {
-#ifdef MOLKIE_WRITER_H
-  Writer w = FILE_writer(stdout);
-  eprint(e, &w);
-#else
-  printf("error: %s\n", e->msg);
-#endif
+  efprint(e, stdout);
 }
 
 // A test body returns an Error (so it can use etry); the wrapper fails the

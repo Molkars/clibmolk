@@ -24,7 +24,7 @@ dependencies must be defined somewhere in the program too.
 |------------|--------------------------|-----------------------------------------|
 | `attr.h`   | –                        | `PRINTF_LIKE`                           |
 | `test.h`   | –                        | tiny fork-per-test runner, `ASSERT_EQ`  |
-| `err.h`    | attr                     | `Error`, `enew`, `eerrno`, `etry`, ...  |
+| `err.h`    | attr                     | `Error`, `enew`, `etry`, `efprint`, ... |
 | `writer.h` | attr, err                | `Writer`, `Scratch`, `eprint`           |
 | `io.h`     | err                      | EINTR-safe `FILE*` helpers              |
 | `array.h`  | err                      | typed growable array                    |
@@ -33,7 +33,7 @@ dependencies must be defined somewhere in the program too.
 | `str.h`    | array, attr, cstr, err   | growable `String`                       |
 
 `deps.json` is the source of truth (`just deps` checks it against the
-includes). `err` has no idea `Writer` exists; `eprint` lives in `writer.h`.
+includes). `err` has no idea `Writer` exists: `efprint` (plain `FILE *`) is in `err.h`, `eprint` (`Writer`) is in `writer.h`.
 
 ## Fetching
 
