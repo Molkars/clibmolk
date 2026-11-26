@@ -124,6 +124,13 @@ etry(io_close(f));                   // flushes; f is gone even on error
 - `io_forward(dst, src)`: copy to EOF (doesn't flush `dst`).
 - `io_flush(f)`: null is `EINVAL`, not "flush all".
 - Always `io_close` write streams and check it: that's where disk-full shows.
+- Every `io_*` failure is an `Error`: print it to any `FILE *` with
+  `efprint(&e, stderr)` (from `err.h`, no `writer.h` needed), then `efree(&e)`.
+
+```c
+Error e = io_forward(dst, src);
+if (!e.ok) { efprint(&e, stderr); efree(&e); }
+```
 
 ## array.h — typed growable array
 
