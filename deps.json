@@ -1,0 +1,11 @@
+{
+  "attr": [],
+  "test": [],
+  "err": ["attr"],
+  "writer": ["attr", "err"],
+  "io": ["err"],
+  "array": ["err"],
+  "btree": ["err"],
+  "cstr": ["attr", "err"],
+  "str": ["array", "attr", "cstr", "err"]
+}

@@ -1,0 +1,5 @@
+# Turn on impl + test blocks when clangd parses headers directly.
+If:
+  PathMatch: inc/.*\.h
+CompileFlags:
+  Add: [-DMTEST, -DMOLKIE_ERR_IMPL, -DMOLKIE_WRITER_IMPL, -DMOLKIE_ARRAY_IMPL, -DMOLKIE_BTREE_IMPL, -DMOLKIE_IO_IMPL, -DMOLKIE_CSTR_IMPL, -DMOLKIE_STR_IMPL, -Iinc]
