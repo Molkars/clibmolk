@@ -196,6 +196,13 @@ PARSER_FIXED_UNSIGNED(PARSER_DECLARE_FIXED_)
   _Generic((dst), CSTR_TO_TYPES(PARSER_P_ASSOC_) struct parser_no_parse_ *:    \
                Parser_p_int)((p), (dst))
 
+/// consumes the next byte into [out], whatever it is (a space, a newline, a
+/// NUL). Fails with `EINVAL` at the end of the input (of the group, for a
+/// group), leaving [out] untouched. To only accept certain bytes, use
+/// `Parser_takec`. Not part of `Parser_p(p, &x)`: a `char *` is too often a
+/// string to let it pick a one-byte parse
+NODISCARD Error Parser_p_char(Parser *p, char *out);
+
 /// replaces [out] with the bytes up to (not including) the first one in
 /// [stop], or up to the end if [stop] is NULL or never matches. The stop byte
 /// is not consumed. Fails only if memory runs out
@@ -696,6 +703,15 @@ PARSER_FIXED_UNSIGNED(PARSER_DEFINE_UNSIGNED_)
 #undef PARSER_DEFINE_UNSIGNED_
 #undef PARSER_DEFINE_FIXED_
 
+Error Parser_p_char(Parser *p, char *out) {
+  assert(p && out && "null argument");
+  if (!_pavail(p, 1))
+    return Parser_fail(p, EINVAL, "expected a character, found end of input");
+  *out = _pat(p)[0];
+  p->pos++;
+  return eok();
+}
+
 Error Parser_p_until(Parser *p, const char *stop, String *out) {
   assert(p && out && "null argument");
   String_reset(out);
@@ -929,6 +945,27 @@ static void parser_numbers(void) {
   Parser_skipws(&p);
   assert(Parser_p(&p, &i).ok && i == 12);
   ASSERT_EQ(Parser_peek1(&p), 'a');
+  Parser_free(&p);
+}
+
+static void parser_p_char(void) {
+  Parser p, g;
+  char c = 'z';
+  Parser_newBytes(&p, "a \0(b)", 6);
+  assert(Parser_p_char(&p, &c).ok && c == 'a');
+  assert(Parser_p_char(&p, &c).ok && c == ' ');
+  assert(Parser_p_char(&p, &c).ok && c == 0); // any byte, a NUL too
+  assert(Parser_group(&p, &g, "(", ")").ok);
+  assert(Parser_p_char(&g, &c).ok && c == 'b');
+  c = 'z';
+  Error e = Parser_p_char(&g, &c); // the group ends before ')'
+  ASSERT_EQ(e.code, EINVAL);
+  assert(c == 'z' && strstr(e.msg, "found end of input") && strstr(e.msg, "1:6"));
+  efree(&e);
+  assert(Parser_groupEnd(&g).ok);
+  e = Parser_p_char(&p, &c);
+  ASSERT_EQ(e.code, EINVAL);
+  efree(&e);
   Parser_free(&p);
 }
 
@@ -1426,7 +1463,7 @@ static int parser_tests(void) {
       T(parser_stream),       T(parser_read_error),  T(parser_subsection),
       T(parser_fail),         T(parser_peekn),       T(parser_done),
       T(parser_lines),        T(parser_p_line),      T(parser_list),
-      T(parser_fixed),        T(parser_fixed_range),
+      T(parser_fixed),        T(parser_fixed_range),  T(parser_p_char),
   };
   size_t n = sizeof tests / sizeof *tests, passed = 0;
   for (size_t i = 0; i < n; i++)
