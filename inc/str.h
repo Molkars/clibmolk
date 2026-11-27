@@ -106,6 +106,12 @@ NODISCARD Error String_split(const String *s, Strings *out);
 /// gives one empty field. On failure `out` is freed and left empty
 NODISCARD Error String_splitOn(const String *s, const char *delim, Strings *out);
 
+/// like `String_splitOn`, but the delimiter is a String, so it may contain NUL
+/// bytes: `"a\0b\0\0"` on `"\0"` gives `"a"`, `"b"`, `""`, `""`. An empty or
+/// null [delim] is `EINVAL`
+NODISCARD Error String_splitOnS(const String *s, const String *delim,
+                                Strings *out);
+
 /// splits `s` on runs of whitespace into exactly [nparts] words, written to
 /// `parts[0..nparts)` as new copies. For when the shape is known:
 /// ```
@@ -125,6 +131,11 @@ NODISCARD Error String_split2(const String *s, String *parts, size_t nparts);
 /// Matches don't overlap, scanning left to right
 NODISCARD Error String_splitOn2(const String *s, const char *delim, String *parts,
                       size_t nparts);
+
+/// like `String_splitOn2`, but the delimiter is a String, so it may contain NUL
+/// bytes. An empty or null [delim] is `EINVAL`
+NODISCARD Error String_splitOnS2(const String *s, const String *delim,
+                                 String *parts, size_t nparts);
 
 /// true if `s` is non-empty and consists only of ASCII digits `0`-`9`
 int String_isdigits(const String *s);
@@ -411,9 +422,9 @@ static int _splitNext(_SplitIter *it, const char **tok, size_t *n) {
   return 1;
 }
 
-static Error _splitFixed(const String *s, const char *delim, String *parts,
-                         size_t nparts) {
-  size_t dlen = delim ? strlen(delim) : 0;
+// [delim] null: split on whitespace; otherwise on the [dlen] bytes at [delim]
+static Error _splitFixed(const String *s, const char *delim, size_t dlen,
+                         String *parts, size_t nparts) {
   if (!s)
     return enew(EINVAL, "string is null");
   if (!parts && nparts)
@@ -446,16 +457,17 @@ static Error _splitFixed(const String *s, const char *delim, String *parts,
   return eok();
 }
 
-Error String_splitOn(const String *s, const char *delim, Strings *out) {
+static Error _splitOn(const String *s, const char *delim, size_t dlen,
+                      Strings *out) {
   assert(out && "out is null");
   if (!s)
     return enew(EINVAL, "string is null");
-  if (!delim || !*delim)
+  if (!delim || !dlen)
     return enew(EINVAL, "delimiter is null or empty");
 
   const char *base = String_cstr(s), *tok;
   size_t n;
-  _SplitIter it = {base, base + s->len, delim, strlen(delim), 0};
+  _SplitIter it = {base, base + s->len, delim, dlen, 0};
   while (_splitNext(&it, &tok, &n)) {
     String part = String_from(tok, n);
     if (!part.buf && n) {
@@ -472,15 +484,32 @@ Error String_splitOn(const String *s, const char *delim, Strings *out) {
   return eok();
 }
 
+Error String_splitOn(const String *s, const char *delim, Strings *out) {
+  return _splitOn(s, delim, delim ? strlen(delim) : 0, out);
+}
+
+Error String_splitOnS(const String *s, const String *delim, Strings *out) {
+  if (!delim)
+    return enew(EINVAL, "delimiter is null or empty");
+  return _splitOn(s, String_cstr(delim), delim->len, out);
+}
+
 Error String_split2(const String *s, String *parts, size_t nparts) {
-  return _splitFixed(s, NULL, parts, nparts);
+  return _splitFixed(s, NULL, 0, parts, nparts);
 }
 
 Error String_splitOn2(const String *s, const char *delim, String *parts,
                       size_t nparts) {
   if (!delim)
     return enew(EINVAL, "delimiter is null");
-  return _splitFixed(s, delim, parts, nparts);
+  return _splitFixed(s, delim, strlen(delim), parts, nparts);
+}
+
+Error String_splitOnS2(const String *s, const String *delim, String *parts,
+                       size_t nparts) {
+  if (!delim)
+    return enew(EINVAL, "delimiter is null");
+  return _splitFixed(s, String_cstr(delim), delim->len, parts, nparts);
 }
 
 // moves `*line` into `lines`. on success `*line` is reset to empty
@@ -681,6 +710,36 @@ static void str_split_on(void) {
   ASSERT_EQ(w.len, 0);
   String_free(&s);
   String_free(&m);
+}
+
+static void str_split_on_s(void) {
+  // NUL-delimited, ending in a double NUL: the last two fields are empty
+  String s = String_from("a\0b\0\0", 5), d = String_from("\0", 1);
+  Strings w = array_empty(String);
+  assert(String_splitOnS(&s, &d, &w).ok);
+  assert(w.len == 4);
+  assert(w.elements[0].len == 1 && w.elements[0].buf[0] == 'a');
+  assert(w.elements[1].len == 1 && w.elements[1].buf[0] == 'b');
+  assert(w.elements[2].len == 0 && w.elements[3].len == 0);
+  array_free0(&w, String_free2);
+
+  String m = String_from("x\0\0y\0\0", 6), dd = String_from("\0\0", 2);
+  assert(String_splitOnS(&m, &dd, &w).ok);
+  assert(w.len == 3 && w.elements[0].len == 1 && w.elements[1].len == 1 &&
+         w.elements[2].len == 0);
+  array_free0(&w, String_free2);
+
+  String e = String_empty();
+  assert(String_splitOnS(&s, &e, &w).code == EINVAL);
+  assert(String_splitOnS(&s, NULL, &w).code == EINVAL);
+  String p[4];
+  assert(String_splitOnS2(&s, &d, p, 4).ok);
+  assert(p[0].len == 1 && p[1].len == 1 && !p[2].len && !p[3].len);
+  for (int i = 0; i < 4; i++)
+    String_free(&p[i]);
+  assert(!String_splitOnS2(&s, &d, p, 3).ok);
+  assert(String_splitOnS2(&s, &e, p, 4).code == EINVAL);
+  String_free(&s), String_free(&d), String_free(&m), String_free(&dd);
 }
 
 static void str_split2(void) {
@@ -1056,7 +1115,7 @@ static int str_tests(void) {
       T(str_format),
       T(str_eq),        T(str_trim),
       T(str_split),     T(str_split2),
-      T(str_split_on),
+      T(str_split_on), T(str_split_on_s),
       T(str_split_on2), T(str_isdigits),
       T(str_to_sizet),
       T(str_to_generic),  T(str_to_sizet_errors),

@@ -361,12 +361,14 @@ Parse/split:
 Strings words = array_empty(String);   // Strings = array_t(String)
 etry(String_split(&s, &words));        // on whitespace, new copies
 etry(String_splitOn(&s, ",", &words)); // on a delimiter string, keeps empty fields
+etry(String_splitOnS(&s, &delim, &words)); // delimiter is a String: may hold NULs
 array_free0(&words, String_free2);     // frees each String, then the array
 
 // known shape: exactly N parts into a C array (EINVAL if the count differs)
 String kv[2];
 etry(String_split2(&line, kv, 2));           // whitespace
 etry(String_splitOn2(&line, "=", kv, 2));    // any non-empty delimiter string
+etry(String_splitOnS2(&line, &delim, kv, 2)); // same, delimiter is a String
 String_free(&kv[0]); String_free(&kv[1]);
 ```
 
