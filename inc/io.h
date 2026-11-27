@@ -169,7 +169,7 @@ Error eprint(const Error *e, Writer w);
 //   type   ints: `x` `X` `o` `b` (`d` is the default); `c` prints the integer
 //          as a character (UTF-8), which is how to print a `'x'` literal;
 //          floats: `e` `E` `f` `g` `G`; none = shortest text that round-trips;
-//          `?` debug form, only for `String` (see str.h): quoted and escaped,
+//          `?` debug form, only for `String` and `zstr` (see str.h, cstr.h): quoted and escaped,
 //          so NULs and control bytes show. Not valid for `char *`
 //
 // Arguments are plain values of the types in IO_BUILTIN_TYPES below (integers,

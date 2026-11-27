@@ -58,6 +58,16 @@ NODISCARD Error cstr_format(char **out, const char *fmt, ...) PRINTF_LIKE(2, 3);
 /// `n > 0`
 NODISCARD Error cstr_sformat(char *s, size_t n, const char *fmt, ...) PRINTF_LIKE(3, 4);
 
+/// The `{:?}` debug form of the `n` bytes at `src`: in double quotes, with
+/// escapes \0 \n \r \t \\ \" and \xNN (lowercase hex) for other bytes below
+/// 0x20, 0x7f, and bytes that aren't part of valid UTF-8; valid UTF-8 passes
+/// through. NULs are part of the string. Width, fill and align (default `<`)
+/// apply to the whole output and count characters (quotes and each escape
+/// included, a UTF-8 sequence as one). `.N` shows at most the first N source
+/// bytes (never splitting a UTF-8 sequence) and writes `...` after the closing
+/// quote if anything was cut. `spec.type` isn't checked
+NODISCARD Error cstr_debug(Writer w, const char *src, size_t n, FormatSpec spec);
+
 /// A counted string: `len` bytes at `p`. Not owned, not required to be
 /// NUL-terminated, and may hold NULs.
 typedef struct {
@@ -69,7 +79,9 @@ typedef struct {
 // specs as a `char *` (width, fill, align, `.N` to truncate), but exactly `len`
 // bytes are the string: it doesn't stop at a NUL, and `p[len]` is never read.
 // A NULL `p` or `len <= 0` prints as empty. Don't also list zstr in
-// IO_FORMAT_TYPES. Any type char other than none or `s` is EINVAL.
+// IO_FORMAT_TYPES. `{:?}` is the debug form, same as for a String (see str.h
+// and cstr_debug): quoted and escaped, so NULs and control bytes show. Any
+// other type char than none, `s` or `?` is EINVAL.
 #undef IO_FORMAT_EXT_CSTR
 #define IO_FORMAT_EXT_CSTR(X) X(zstr)
 IO_FORMAT_DEFINE(zstr)
@@ -282,9 +294,121 @@ Error cstr_sformat(char *s, size_t n, const char *fmt, ...) {
   return e;
 }
 
+// One unit of `{:?}` output: a valid UTF-8 sequence (passed through), or a
+// single byte, escaped. Returns the source bytes consumed; the text goes in
+// out[0..*outn)
+static size_t _cstrDbgUnit(const unsigned char *p, size_t n, char out[4],
+                       size_t *outn) {
+  unsigned char c = p[0];
+  size_t k = 0;
+  switch (c) {
+  case 0:    memcpy(out, "\\0", 2); *outn = 2; return 1;
+  case '\n': memcpy(out, "\\n", 2); *outn = 2; return 1;
+  case '\r': memcpy(out, "\\r", 2); *outn = 2; return 1;
+  case '\t': memcpy(out, "\\t", 2); *outn = 2; return 1;
+  case '\\': memcpy(out, "\\\\", 2); *outn = 2; return 1;
+  case '"':  memcpy(out, "\\\"", 2); *outn = 2; return 1;
+  }
+  if (c < 0x20 || c == 0x7f) {
+    static const char hex[] = "0123456789abcdef";
+    out[0] = '\\', out[1] = 'x', out[2] = hex[c >> 4], out[3] = hex[c & 15];
+    *outn = 4;
+    return 1;
+  }
+  if (c >= 0x80) { // valid UTF-8 (no overlongs, surrogates or > U+10FFFF)?
+    size_t len = c >= 0xC2 && c <= 0xDF ? 2 : (c & 0xF0) == 0xE0 ? 3
+               : c >= 0xF0 && c <= 0xF4 ? 4 : 0;
+    if (len && len <= n) {
+      int ok = 1;
+      for (size_t i = 1; i < len; i++)
+        ok &= (p[i] & 0xC0) == 0x80;
+      if (ok && c == 0xE0) ok = p[1] >= 0xA0;
+      if (ok && c == 0xED) ok = p[1] <= 0x9F;
+      if (ok && c == 0xF0) ok = p[1] >= 0x90;
+      if (ok && c == 0xF4) ok = p[1] <= 0x8F;
+      if (ok) {
+        memcpy(out, p, len);
+        *outn = len;
+        return len;
+      }
+    }
+    static const char hex[] = "0123456789abcdef";
+    out[0] = '\\', out[1] = 'x', out[2] = hex[c >> 4], out[3] = hex[c & 15];
+    *outn = 4;
+    return 1;
+  }
+  out[k++] = (char)c;
+  *outn = k;
+  return 1;
+}
+
+// Walks the first `limit` bytes of src[0..n) (never splitting a UTF-8 sequence)
+// counting the output characters (not the quotes), and writes them if `w` is
+// non-NULL. *used is the source bytes covered
+static Error _cstrDbgWalk(Writer *w, const char *src, size_t n, size_t limit,
+                      size_t *chars, size_t *used) {
+  const unsigned char *p = (const unsigned char *)src;
+  char buf[64];
+  size_t bn = 0, i = 0, cc = 0;
+  while (i < n) {
+    char u[4];
+    size_t un;
+    size_t k = _cstrDbgUnit(p + i, n - i, u, &un);
+    if (i + k > limit)
+      break;
+    i += k;
+    // an escape is un characters; a UTF-8 sequence is one
+    cc += (u[0] == '\\' && un >= 2) ? un : 1;
+    if (w) {
+      if (bn + un > sizeof buf) {
+        Error e = Wwrite(*w, buf, bn);
+        if (!e.ok)
+          return e;
+        bn = 0;
+      }
+      memcpy(buf + bn, u, un);
+      bn += un;
+    }
+  }
+  *chars = cc;
+  *used = i;
+  if (w && bn)
+    return Wwrite(*w, buf, bn);
+  return eok();
+}
+
+Error cstr_debug(Writer w, const char *src, size_t n, FormatSpec spec) {
+  size_t limit = spec.hasPrecision ? (size_t)spec.precision : n;
+  size_t chars, used;
+  Error e = _cstrDbgWalk(NULL, src, n, limit, &chars, &used);
+  if (!e.ok)
+    return e;
+  int cut = used < n;
+  chars += 2 + (cut ? 3 : 0); // the quotes, and the `...`
+  size_t pad = (size_t)spec.width > chars ? (size_t)spec.width - chars : 0;
+  char align = spec.align ? spec.align : '<';
+  size_t before = align == '>' ? pad : align == '^' ? pad / 2 : 0;
+  char fill = spec.fill ? spec.fill : ' ';
+  e = io_fill(w, fill, before);
+  if (e.ok)
+    e = Wputc(w, '"');
+  if (e.ok)
+    e = _cstrDbgWalk(&w, src, n, limit, &chars, &used);
+  if (e.ok)
+    e = Wputc(w, '"');
+  if (e.ok && cut)
+    e = Wputs(w, "...");
+  if (e.ok)
+    e = io_fill(w, fill, pad - before);
+  return e;
+}
+
 Error zstr_format(Writer w, const zstr *v, FormatSpec spec) {
-  if (spec.type != 0 && spec.type != 's')
+  if (spec.type != 0 && spec.type != 's' && spec.type != '?')
     return enew(EINVAL, "'%c' is not a format for zstr", spec.type);
+  if (spec.type == '?')
+    return cstr_debug(w, v && v->p && v->len > 0 ? v->p : "",
+                      v && v->p && v->len > 0 ? (size_t)v->len : 0, spec);
   const char *str = v && v->p && v->len > 0 ? v->p : "";
   size_t n = v && v->p && v->len > 0 ? (size_t)v->len : 0, chars;
   if (spec.hasPrecision) { // keep at most `precision` characters
@@ -515,6 +639,13 @@ static void cstr_zstr_format(void) {
   Writer cw = {zstr_capture, &cap};
   assert(io_fprint(cw, "{}", &w).ok);
   assert(cap.n == 3 && !memcmp(cap.buf, "a\0b", 3));
+  // {:?}: same debug form as String
+  zstr d = {5, "a\0b\n\""};
+  ZCHECK("\"a\\0b\\n\\\"\"", "{:?}", &d);
+  ZCHECK("[\"a\\0\"...]", "[{:.2?}]", &d);
+  ZCHECK("[ \"abc\"]", "[{:>6?}]", &z);
+  ZCHECK("\"\"", "{:?}", &nul);
+  ZCHECK("\"\"", "{:?}", &neg);
   char b2[16];
   Scratch sc2 = Scratch_init(b2, sizeof b2);
   assert(io_fprint(Scratch_writer(&sc2), "{:d}", &z).code == EINVAL);
