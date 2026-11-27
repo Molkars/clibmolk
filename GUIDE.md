@@ -427,6 +427,7 @@ A piece of a String: `Parser_newBytes(&p, s.buf + from, len)`.
 | `Parser_skipblank`, `Parser_atLineEnd`, `Parser_expectNewline`, `Parser_p_line` | line-based formats: spaces/tabs only, `\n` or `\r\n`, the end of input ends a last line |
 | `Parser_p_list(p, ",", item, ctx)` | items separated by a string (NULL: whitespace) up to the end; `item` is `Error fn(Parser *, void *ctx)` |
 | `Parser_p_sizet`, `Parser_p(p, &x)` | a number; `Parser_p` picks the type from `&x` like `cstr_to` (int, double, bool, ...) |
+| `Parser_p_i8`..`u64`, `ssize`, `ptrdiff`, `intmax`, `uintmax` | fixed-width ints, range-checked (`ERANGE`, nothing consumed); not in `Parser_p`, call by name |
 | `Parser_p_until(p, ",;", &s)` / `Parser_p_while(p, isalpha, &s)` | text into a `String`, stop byte not consumed |
 | `Parser_mark` / `Parser_reset` | backtrack (free: the bytes stay in memory) |
 

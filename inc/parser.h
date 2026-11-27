@@ -2,6 +2,8 @@
 #define MOLKIE_PARSER_H
 
 #include <stddef.h>
+#include <stdint.h>
+#include <sys/types.h>
 
 #include "attr.h"
 #include "cstr.h"
@@ -155,13 +157,39 @@ NODISCARD Error Parser_ioerr(Parser *p);
 /// - bool: `true` or `false`
 ///
 /// `Parser_p_<name>(Parser *, T *)` for each (T, name) in `CSTR_TO_TYPES`,
-/// `Parser_p_sizet`, or let the destination pick: `Parser_p(p, &n)`
+/// `Parser_p_sizet`, the fixed-width names below, or let the destination pick:
+/// `Parser_p(p, &n)` (not for the fixed-width ones)
 #define PARSER_DECLARE_P_(T, N)                                                \
   NODISCARD Error Parser_p_##N(Parser *p, T *out);
 CSTR_TO_TYPES(PARSER_DECLARE_P_)
 #undef PARSER_DECLARE_P_
 
 NODISCARD Error Parser_p_sizet(Parser *p, size_t *out);
+
+/// Fixed-width and other named integer types: the number is parsed as the
+/// widest integer, then checked against the range of the type, so `300` into a
+/// `uint8_t` is `ERANGE` (and nothing is consumed). Same syntax as the
+/// `CSTR_TO_TYPES` integers. Not part of `Parser_p(p, &x)`: `int32_t` is `int`
+/// on most platforms, so the type alone can't pick between the names
+#define PARSER_FIXED_SIGNED(X)                                                 \
+  X(int8_t, i8)                                                                \
+  X(int16_t, i16)                                                              \
+  X(int32_t, i32)                                                              \
+  X(int64_t, i64)                                                              \
+  X(intmax_t, intmax)                                                          \
+  X(ssize_t, ssize)                                                            \
+  X(ptrdiff_t, ptrdiff)
+#define PARSER_FIXED_UNSIGNED(X)                                               \
+  X(uint8_t, u8)                                                               \
+  X(uint16_t, u16)                                                             \
+  X(uint32_t, u32)                                                             \
+  X(uint64_t, u64)                                                             \
+  X(uintmax_t, uintmax)
+#define PARSER_DECLARE_FIXED_(T, N)                                            \
+  NODISCARD Error Parser_p_##N(Parser *p, T *out);
+PARSER_FIXED_SIGNED(PARSER_DECLARE_FIXED_)
+PARSER_FIXED_UNSIGNED(PARSER_DECLARE_FIXED_)
+#undef PARSER_DECLARE_FIXED_
 
 #define PARSER_P_ASSOC_(T, N) T *: Parser_p_##N,
 #define Parser_p(p, dst)                                                       \
@@ -640,6 +668,34 @@ end:
   return eret;
 }
 
+// parsed as long long / unsigned long long, then checked by converting to T and
+// back: a value that doesn't survive doesn't fit. Nothing is consumed then
+#define PARSER_DEFINE_FIXED_(T, N, WIDE, KIND)                                 \
+  Error Parser_p_##N(Parser *p, T *out) {                                      \
+    assert(p && out && "null argument");                                       \
+    Error eret = eok();                                                        \
+    size_t mark = Parser_mark(p);                                              \
+    WIDE v = 0;                                                                \
+    etry(Parser_p_##KIND(p, &v));                                              \
+    if ((WIDE)(T)v != v) {                                                     \
+      Parser_reset(p, mark);                                                   \
+      eret = Parser_fail(p, ERANGE, "number is out of range for " #T);         \
+      goto end;                                                                \
+    }                                                                          \
+    *out = (T)v;                                                               \
+  end:                                                                         \
+    return eret;                                                               \
+  }
+#define PARSER_DEFINE_SIGNED_(T, N)                                            \
+  PARSER_DEFINE_FIXED_(T, N, long long, llong)
+#define PARSER_DEFINE_UNSIGNED_(T, N)                                          \
+  PARSER_DEFINE_FIXED_(T, N, unsigned long long, ullong)
+PARSER_FIXED_SIGNED(PARSER_DEFINE_SIGNED_)
+PARSER_FIXED_UNSIGNED(PARSER_DEFINE_UNSIGNED_)
+#undef PARSER_DEFINE_SIGNED_
+#undef PARSER_DEFINE_UNSIGNED_
+#undef PARSER_DEFINE_FIXED_
+
 Error Parser_p_until(Parser *p, const char *stop, String *out) {
   assert(p && out && "null argument");
   String_reset(out);
@@ -873,6 +929,86 @@ static void parser_numbers(void) {
   Parser_skipws(&p);
   assert(Parser_p(&p, &i).ok && i == 12);
   ASSERT_EQ(Parser_peek1(&p), 'a');
+  Parser_free(&p);
+}
+
+static void parser_fixed(void) {
+  Parser p;
+  int8_t a;
+  uint8_t b;
+  int16_t c;
+  uint32_t d;
+  int64_t e64;
+  uint64_t f;
+  ssize_t g;
+  ptrdiff_t h;
+  intmax_t i;
+  Parser_newc(&p, "127 -128 255 -32768 4294967295 -9223372036854775808 "
+                  "18446744073709551615 -5 -6 -7");
+  assert(Parser_p_i8(&p, &a).ok && a == 127);
+  Parser_skipws(&p);
+  assert(Parser_p_i8(&p, &a).ok && a == -128);
+  Parser_skipws(&p);
+  assert(Parser_p_u8(&p, &b).ok && b == 255);
+  Parser_skipws(&p);
+  assert(Parser_p_i16(&p, &c).ok && c == INT16_MIN);
+  Parser_skipws(&p);
+  assert(Parser_p_u32(&p, &d).ok && d == UINT32_MAX);
+  Parser_skipws(&p);
+  assert(Parser_p_i64(&p, &e64).ok && e64 == INT64_MIN);
+  Parser_skipws(&p);
+  assert(Parser_p_u64(&p, &f).ok && f == UINT64_MAX);
+  Parser_skipws(&p);
+  assert(Parser_p_ssize(&p, &g).ok && g == -5);
+  Parser_skipws(&p);
+  assert(Parser_p_ptrdiff(&p, &h).ok && h == -6);
+  Parser_skipws(&p);
+  assert(Parser_p_intmax(&p, &i).ok && i == -7);
+  assert(Parser_end(&p).ok);
+  Parser_free(&p);
+}
+
+static void parser_fixed_range(void) {
+  Parser p;
+  int8_t a = 5;
+  uint8_t b = 5;
+  uint16_t c = 5;
+  int32_t d = 5;
+  Parser_newc(&p, "128 -129 256 -1 65536 2147483648 99999999999999999999999");
+  Error e = Parser_p_i8(&p, &a);
+  ASSERT_EQ(e.code, ERANGE);
+  assert(strstr(e.msg, "out of range for int8_t") && strstr(e.msg, "1:1"));
+  efree(&e);
+  ASSERT_EQ(Parser_mark(&p), 0); // nothing consumed, so it can be retried
+  assert(a == 5);
+  Parser_take1(&p);
+  Parser_take1(&p);
+  Parser_take1(&p);
+  Parser_skipws(&p);
+  e = Parser_p_i8(&p, &a);
+  ASSERT_EQ(e.code, ERANGE);
+  efree(&e);
+  Parser_reset(&p, 9);
+  e = Parser_p_u8(&p, &b);
+  ASSERT_EQ(e.code, ERANGE);
+  efree(&e);
+  Parser_reset(&p, 13);
+  e = Parser_p_u8(&p, &b); // unsigned: no sign at all
+  ASSERT_EQ(e.code, EINVAL);
+  efree(&e);
+  Parser_reset(&p, 16);
+  e = Parser_p_u16(&p, &c);
+  ASSERT_EQ(e.code, ERANGE);
+  efree(&e);
+  Parser_reset(&p, 22);
+  e = Parser_p_i32(&p, &d);
+  ASSERT_EQ(e.code, ERANGE);
+  efree(&e);
+  Parser_reset(&p, 33);
+  e = Parser_p_i32(&p, &d); // too big even for the wide parse
+  ASSERT_EQ(e.code, ERANGE);
+  efree(&e);
+  assert(b == 5 && c == 5 && d == 5);
   Parser_free(&p);
 }
 
@@ -1290,6 +1426,7 @@ static int parser_tests(void) {
       T(parser_stream),       T(parser_read_error),  T(parser_subsection),
       T(parser_fail),         T(parser_peekn),       T(parser_done),
       T(parser_lines),        T(parser_p_line),      T(parser_list),
+      T(parser_fixed),        T(parser_fixed_range),
   };
   size_t n = sizeof tests / sizeof *tests, passed = 0;
   for (size_t i = 0; i < n; i++)
