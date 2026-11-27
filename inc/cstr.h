@@ -3,6 +3,7 @@
 
 #include "attr.h"
 #include "err.h"
+#include "io.h"
 #include <stddef.h>
 
 /// returns 0 if s is null/empty or any character in `s` is not a digit
@@ -56,6 +57,22 @@ NODISCARD Error cstr_format(char **out, const char *fmt, ...) PRINTF_LIKE(2, 3);
 /// doesn't fit or can't be formatted. [s] is always NUL-terminated when
 /// `n > 0`
 NODISCARD Error cstr_sformat(char *s, size_t n, const char *fmt, ...) PRINTF_LIKE(3, 4);
+
+/// A counted string: `len` bytes at `p`. Not owned, not required to be
+/// NUL-terminated, and may hold NULs.
+typedef struct {
+  int len;
+  char *p;
+} zstr;
+
+// `{}` formatting: pass a zstr by address, `io_fprint(w, "{:>8}", &z)`. Same
+// specs as a `char *` (width, fill, align, `.N` to truncate), but exactly `len`
+// bytes are the string: it doesn't stop at a NUL, and `p[len]` is never read.
+// A NULL `p` or `len <= 0` prints as empty. Don't also list zstr in
+// IO_FORMAT_TYPES. Any type char other than none or `s` is EINVAL.
+#undef IO_FORMAT_EXT_CSTR
+#define IO_FORMAT_EXT_CSTR(X) X(zstr)
+IO_FORMAT_DEFINE(zstr)
 
 #endif // MOLKIE_CSTR_H
 
@@ -265,6 +282,27 @@ Error cstr_sformat(char *s, size_t n, const char *fmt, ...) {
   return e;
 }
 
+Error zstr_format(Writer w, const zstr *v, FormatSpec spec) {
+  if (spec.type != 0 && spec.type != 's')
+    return enew(EINVAL, "'%c' is not a format for zstr", spec.type);
+  const char *str = v && v->p && v->len > 0 ? v->p : "";
+  size_t n = v && v->p && v->len > 0 ? (size_t)v->len : 0, chars;
+  if (spec.hasPrecision) { // keep at most `precision` characters
+    size_t i = 0;
+    chars = 0;
+    while (i < n && chars < (size_t)spec.precision) {
+      i++;
+      while (i < n && ((unsigned char)str[i] & 0xC0) == 0x80)
+        i++;
+      chars++;
+    }
+    n = i;
+  } else {
+    chars = io_utf8Chars(str, n);
+  }
+  return io_emit(w, spec, "", 0, str, n, chars, '<', false);
+}
+
 #endif // MOLKIE_CSTR_IMPL
 
 // Tests: compiled where MTEST (all modules) or MOLKIE_CSTR_TEST (just this one)
@@ -277,6 +315,7 @@ Error cstr_sformat(char *s, size_t n, const char *fmt, ...) {
 #include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "test.h"
 
@@ -432,6 +471,56 @@ static void cstr_formats(void) {
   assert(buf[sizeof buf - 1] == 0); // still NUL-terminated
 }
 
+static Error zstr_capture(void *p, const char *b, size_t n) {
+  struct {
+    char buf[8];
+    size_t n;
+  } *c = p;
+  memcpy(c->buf + c->n, b, n);
+  c->n += n;
+  return eok();
+}
+
+static void cstr_zstr_format(void) {
+#define ZCHECK(want, ...)                                                      \
+  do {                                                                         \
+    char b_[64];                                                               \
+    Scratch sc_ = Scratch_init(b_, sizeof b_);                                 \
+    Error e_ = io_fprint(Scratch_writer(&sc_), __VA_ARGS__);                   \
+    assert(e_.ok && !strcmp(b_, want));                                        \
+  } while (0)
+  char raw[] = {'a', 'b', 'c', 'd'}; // no NUL: len must bound the read
+  zstr z = {3, raw};
+  ZCHECK("abc", "{}", &z);
+  ZCHECK("[  abc]", "[{:>5}]", &z);
+  ZCHECK("[abc  ]", "[{:5}]", &z);
+  ZCHECK("[*abc*]", "[{:*^5}]", &z);
+  ZCHECK("ab", "{:.2}", &z);
+  const zstr *cz = &z;
+  ZCHECK("abc!", "{}!", cz);
+  zstr u = {4, "h\xC3\xA9y"}; // é counts as one character
+  ZCHECK("[ h\xC3\xA9y]", "[{:>4}]", &u);
+  ZCHECK("h\xC3\xA9", "{:.2}", &u);
+  zstr e0 = {0, raw}, neg = {-1, raw}, nul = {5, NULL};
+  ZCHECK("[]", "[{}]", &e0);
+  ZCHECK("[]", "[{}]", &neg);
+  ZCHECK("[]", "[{}]", &nul);
+  ZCHECK("[  ]", "[{:2}]", &nul);
+  // stops nowhere near a NUL: the NUL is part of the string
+  zstr w = {3, "a\0b"};
+  struct {
+    char buf[8];
+    size_t n;
+  } cap = {{0}, 0};
+  Writer cw = {zstr_capture, &cap};
+  assert(io_fprint(cw, "{}", &w).ok);
+  assert(cap.n == 3 && !memcmp(cap.buf, "a\0b", 3));
+  char b2[16];
+  Scratch sc2 = Scratch_init(b2, sizeof b2);
+  assert(io_fprint(Scratch_writer(&sc2), "{:d}", &z).code == EINVAL);
+#undef ZCHECK
+}
+
 static int cstr_tests(void) {
   static const TestCase tests[] = {
       T(cstr_digits),
@@ -442,6 +531,7 @@ static int cstr_tests(void) {
       T(cstr_to_generic),
       T(cstr_formats),
       T(cstr_null_args),
+      T(cstr_zstr_format),
   };
   size_t n = sizeof tests / sizeof *tests, passed = 0;
   for (size_t i = 0; i < n; i++)

@@ -5,7 +5,7 @@
   "io": ["attr", "err"],
   "array": ["err"],
   "btree": ["err"],
-  "cstr": ["attr", "err"],
+  "cstr": ["attr", "err", "io"],
   "str": ["array", "attr", "cstr", "err", "io"],
   "parser": ["attr", "cstr", "err", "io", "str"]
 }
