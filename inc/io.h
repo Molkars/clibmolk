@@ -168,7 +168,9 @@ Error eprint(const Error *e, Writer w);
 //   .prec  strings: max characters; floats: digits after the point
 //   type   ints: `x` `X` `o` `b` (`d` is the default); `c` prints the integer
 //          as a character (UTF-8), which is how to print a `'x'` literal;
-//          floats: `e` `E` `f` `g` `G`; none = shortest text that round-trips
+//          floats: `e` `E` `f` `g` `G`; none = shortest text that round-trips;
+//          `?` debug form, only for `String` (see str.h): quoted and escaped,
+//          so NULs and control bytes show. Not valid for `char *`
 //
 // Arguments are plain values of the types in IO_BUILTIN_TYPES below (integers,
 // floats, bool, char, `char *`, `void *`). Other types are passed BY ADDRESS and
@@ -971,7 +973,7 @@ static Error io_parseSpec(const char *fmt, const char *s, size_t n,
   if (i < n)
     r.type = s[i++];
   if (i < n || (r.type && !((r.type >= 'a' && r.type <= 'z') ||
-                            (r.type >= 'A' && r.type <= 'Z'))))
+                            (r.type >= 'A' && r.type <= 'Z') || r.type == '?')))
     return enew(EINVAL, "invalid format spec \"%.*s\" in \"%.60s\"", (int)n, s,
                 fmt);
   *out = r;
@@ -1645,6 +1647,8 @@ static void io_fmt_text_args(void) {
   FMT_IS("hi", "{:.2}", "hi!!");
   FMT_IS("--hi--", "{:-^6}", "hi");
   FMT_IS("(null)", "{}", (const char *)NULL);
+  FMT_BAD("{:?}", "hi"); // `?` parses, but char * has no debug form
+  FMT_BAD("{:>12?}", "hi");
   FMT_IS("héllo", "{}", "héllo");
   FMT_IS("  hé", "{:>4}", "hé"); // width counts characters, not bytes
   FMT_IS("hé", "{:.2}", "héllo");

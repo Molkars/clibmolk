@@ -32,8 +32,21 @@ String String_fromc(const char *src);
 
 // `{}` formatting: pass a String by address, `io_fprint(w, "{:>8}", &s)`. It
 // takes the same specs as a `char *` (width, fill, align, `.N` to truncate).
-// Don't also list String in IO_FORMAT_TYPES. Contents are printed up to the
+// Don't also list String in IO_FORMAT_TYPES. `{}` prints the contents up to the
 // first NUL.
+//
+// `{:?}` is the debug form: the whole string (`len` bytes, NULs included) in
+// double quotes with escapes: \0 \n \r \t \\ \" and \xNN (lowercase hex) for
+// other bytes below 0x20 and for 0x7f. Valid UTF-8 passes through unchanged;
+// bytes that are not part of a valid sequence become \xNN. `String_from(
+// "a\0b", 3)` prints as `"a\0b"`. Width, fill and align (default `<`) apply
+// to the whole output and count characters: quotes and each escape sequence
+// included, a UTF-8 sequence as one. `.N` shows at most the first N source
+// bytes (never splitting a UTF-8 sequence) and, if anything was cut, writes
+// `...` after the closing quote. A NULL or buffer-less String prints `""`.
+// Any other type char than none, `s` or `?` is EINVAL. (`{:?}` on a plain
+// `char *` is EINVAL too: it has no length, so there is nothing a debug form
+// would add over `{}`.)
 #undef IO_FORMAT_EXT_STR
 #define IO_FORMAT_EXT_STR(X) X(String)
 IO_FORMAT_DEFINE(String)
@@ -188,7 +201,130 @@ String String_fromc(const char *src) {
   return String_from(src, strlen(src));
 }
 
+// One unit of `{:?}` output: a valid UTF-8 sequence (passed through), or a
+// single byte, escaped. Returns the source bytes consumed; the text goes in
+// out[0..*outn)
+static size_t _dbgUnit(const unsigned char *p, size_t n, char out[4],
+                       size_t *outn) {
+  unsigned char c = p[0];
+  size_t k = 0;
+  switch (c) {
+  case 0:    memcpy(out, "\\0", 2); *outn = 2; return 1;
+  case '\n': memcpy(out, "\\n", 2); *outn = 2; return 1;
+  case '\r': memcpy(out, "\\r", 2); *outn = 2; return 1;
+  case '\t': memcpy(out, "\\t", 2); *outn = 2; return 1;
+  case '\\': memcpy(out, "\\\\", 2); *outn = 2; return 1;
+  case '"':  memcpy(out, "\\\"", 2); *outn = 2; return 1;
+  }
+  if (c < 0x20 || c == 0x7f) {
+    static const char hex[] = "0123456789abcdef";
+    out[0] = '\\', out[1] = 'x', out[2] = hex[c >> 4], out[3] = hex[c & 15];
+    *outn = 4;
+    return 1;
+  }
+  if (c >= 0x80) { // valid UTF-8 (no overlongs, surrogates or > U+10FFFF)?
+    size_t len = c >= 0xC2 && c <= 0xDF ? 2 : (c & 0xF0) == 0xE0 ? 3
+               : c >= 0xF0 && c <= 0xF4 ? 4 : 0;
+    if (len && len <= n) {
+      int ok = 1;
+      for (size_t i = 1; i < len; i++)
+        ok &= (p[i] & 0xC0) == 0x80;
+      if (ok && c == 0xE0) ok = p[1] >= 0xA0;
+      if (ok && c == 0xED) ok = p[1] <= 0x9F;
+      if (ok && c == 0xF0) ok = p[1] >= 0x90;
+      if (ok && c == 0xF4) ok = p[1] <= 0x8F;
+      if (ok) {
+        memcpy(out, p, len);
+        *outn = len;
+        return len;
+      }
+    }
+    static const char hex[] = "0123456789abcdef";
+    out[0] = '\\', out[1] = 'x', out[2] = hex[c >> 4], out[3] = hex[c & 15];
+    *outn = 4;
+    return 1;
+  }
+  out[k++] = (char)c;
+  *outn = k;
+  return 1;
+}
+
+// Walks the first `limit` bytes of src[0..n) (never splitting a UTF-8 sequence)
+// counting the output characters (not the quotes), and writes them if `w` is
+// non-NULL. *used is the source bytes covered
+static Error _dbgWalk(Writer *w, const char *src, size_t n, size_t limit,
+                      size_t *chars, size_t *used) {
+  const unsigned char *p = (const unsigned char *)src;
+  char buf[64];
+  size_t bn = 0, i = 0, cc = 0;
+  while (i < n) {
+    char u[4];
+    size_t un;
+    size_t k = _dbgUnit(p + i, n - i, u, &un);
+    if (i + k > limit)
+      break;
+    i += k;
+    // an escape is un characters; a UTF-8 sequence is one
+    cc += (u[0] == '\\' && un >= 2) ? un : 1;
+    if (w) {
+      if (bn + un > sizeof buf) {
+        Error e = Wwrite(*w, buf, bn);
+        if (!e.ok)
+          return e;
+        bn = 0;
+      }
+      memcpy(buf + bn, u, un);
+      bn += un;
+    }
+  }
+  *chars = cc;
+  *used = i;
+  if (w && bn)
+    return Wwrite(*w, buf, bn);
+  return eok();
+}
+
+static Error _dbgFill(Writer w, char c, size_t n) {
+  char chunk[32];
+  memset(chunk, c, sizeof chunk < n ? sizeof chunk : n);
+  while (n) {
+    size_t k = n < sizeof chunk ? n : sizeof chunk;
+    Error e = Wwrite(w, chunk, k);
+    if (!e.ok)
+      return e;
+    n -= k;
+  }
+  return eok();
+}
+
 Error String_format(Writer w, const String *s, FormatSpec spec) {
+  if (spec.type == '?') {
+    const char *src = s && s->buf ? s->buf : "";
+    size_t n = s && s->buf ? s->len : 0;
+    size_t limit = spec.hasPrecision ? (size_t)spec.precision : n;
+    size_t chars, used;
+    Error e = _dbgWalk(NULL, src, n, limit, &chars, &used);
+    if (!e.ok)
+      return e;
+    int cut = used < n;
+    chars += 2 + (cut ? 3 : 0); // the quotes, and the `...`
+    size_t pad = (size_t)spec.width > chars ? (size_t)spec.width - chars : 0;
+    char align = spec.align ? spec.align : '<';
+    size_t before = align == '>' ? pad : align == '^' ? pad / 2 : 0;
+    char fill = spec.fill ? spec.fill : ' ';
+    e = _dbgFill(w, fill, before);
+    if (e.ok)
+      e = Wputc(w, '"');
+    if (e.ok)
+      e = _dbgWalk(&w, src, n, limit, &chars, &used);
+    if (e.ok)
+      e = Wputc(w, '"');
+    if (e.ok && cut)
+      e = Wputs(w, "...");
+    if (e.ok)
+      e = _dbgFill(w, fill, pad - before);
+    return e;
+  }
   const char *c = String_cstr(s);
   return charptr_format(w, &c, spec);
 }
@@ -642,6 +778,78 @@ static void str_format(void) {
              .ok);
   assert(!strcmp(b, "[héllo] [  héllo] [hé] [] 5"));
   String_free(&s);
+}
+
+static void str_format_debug(void) {
+#define DBG_IS(want, ...)                                                      \
+  do {                                                                         \
+    char b_[256];                                                              \
+    Scratch s_ = Scratch_init(b_, sizeof b_);                                  \
+    Error e_ = io_fprint(Scratch_writer(&s_), __VA_ARGS__);                    \
+    if (!e_.ok || strcmp(b_, want)) {                                          \
+      fprintf(stderr, "want \"%s\" got \"%s\"\n", want, b_);                    \
+      assert(0);                                                               \
+    }                                                                          \
+  } while (0)
+  String s = String_fromc("plain");
+  DBG_IS("\"plain\"", "{:?}", &s);
+  String_free(&s);
+  s = String_from("zsh\0-c\0foo\0", 11); // embedded and trailing NULs
+  DBG_IS("\"zsh\\0-c\\0foo\\0\"", "{:?}", &s);
+  DBG_IS("zsh", "{}", &s); // plain {} still stops at the NUL
+  String_free(&s);
+  s = String_from("a\0\0b", 4); // consecutive NULs
+  DBG_IS("\"a\\0\\0b\"", "{:?}", &s);
+  String_free(&s);
+  s = String_from("\n\t\r\"\\", 5);
+  DBG_IS("\"\\n\\t\\r\\\"\\\\\"", "{:?}", &s);
+  String_free(&s);
+  s = String_from("\x01\x7f\x1f", 3);
+  DBG_IS("\"\\x01\\x7f\\x1f\"", "{:?}", &s);
+  String_free(&s);
+  s = String_fromc("h\xC3\xA9llo"); // é passes through
+  DBG_IS("\"h\xC3\xA9llo\"", "{:?}", &s);
+  DBG_IS("   \"h\xC3\xA9llo\"", "{:>10?}", &s); // 7 chars with quotes, é counts once
+  String_free(&s);
+  s = String_from("a\xC3\xA9\xFF\xC3", 5); // invalid UTF-8 is escaped
+  DBG_IS("\"a\xC3\xA9\\xff\\xc3\"", "{:?}", &s);
+  String_free(&s);
+  s = String_from("\xE0\x80\x80\xED\xA0\x80", 6); // overlong, surrogate
+  DBG_IS("\"\\xe0\\x80\\x80\\xed\\xa0\\x80\"", "{:?}", &s);
+  String_free(&s);
+  s = String_empty();
+  DBG_IS("\"\"", "{:?}", &s);
+  DBG_IS("[\"\"   ]", "[{:5?}]", &s);
+  String_free(&s);
+  String nb = {0}; // no buffer
+  DBG_IS("\"\"", "{:?}", &nb);
+  s = String_from("a\0b", 3);
+  DBG_IS("[\"a\\0b\"]", "[{:?}]", &s);
+  DBG_IS("[  \"a\\0b\"]", "[{:>8?}]", &s); // 6 chars: quotes and \0 count
+  DBG_IS("[\"a\\0b\"  ]", "[{:8?}]", &s);
+  DBG_IS("[ \"a\\0b\" ]", "[{:^8?}]", &s);
+  DBG_IS("[**\"a\\0b\"]", "[{:*>8?}]", &s);
+  DBG_IS("\"a\"...", "{:.1?}", &s);
+  DBG_IS("\"a\\0b\"", "{:.3?}", &s); // nothing cut: no ...
+  DBG_IS("\"\"...", "{:.0?}", &s);
+  DBG_IS("  \"a\"...", "{:>8.1?}", &s);
+  String_free(&s);
+  s = String_fromc("\xC3\xA9\xC3\xA9");
+  DBG_IS("\"\xC3\xA9\"...", "{:.3?}", &s); // never splits a sequence
+  String_free(&s);
+  // other type chars still fail
+  s = String_fromc("x");
+  char b[16];
+  Scratch sc = Scratch_init(b, sizeof b);
+  Error e = io_fprint(Scratch_writer(&sc), "{:d}", &s);
+  assert(!e.ok && e.code == EINVAL && !b[0]);
+  efree(&e);
+  e = io_fprint(Scratch_writer(&sc), "{:x}", &s);
+  assert(!e.ok && e.code == EINVAL && !b[0]);
+  efree(&e);
+  DBG_IS("x", "{:s}", &s);
+  String_free(&s);
+#undef DBG_IS
 }
 
 static void str_eq(void) {
@@ -1113,6 +1321,7 @@ static int str_tests(void) {
       T(str_self_append),
       T(str_grow_overflow),
       T(str_format),
+      T(str_format_debug),
       T(str_eq),        T(str_trim),
       T(str_split),     T(str_split2),
       T(str_split_on), T(str_split_on_s),
