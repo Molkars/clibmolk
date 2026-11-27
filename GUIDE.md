@@ -25,6 +25,7 @@ somewhere in the program (deps: see `README.md` table). Missing one = link error
 | btree   | ERR, BTREE |
 | cstr    | ERR, CSTR |
 | str     | ERR, ARRAY, CSTR, IO, STR |
+| parser  | ERR, ARRAY, CSTR, IO, STR, PARSER |
 
 Build flags: `-std=c11 -D_POSIX_C_SOURCE=200809L -Iinc`. `array.h` and
 `btree.h` need GNU `__typeof__` (gcc/clang); `io.h` is plain C11.
@@ -397,6 +398,71 @@ array_free0(&lines, String_free2);
 ```
 
 `String` fields (`buf`, `len`, `cap`) are readable; `len` excludes the NUL.
+
+## parser.h — recursive-descent parsing
+
+A `Parser` reads from a `Reader` (lazily, kept in memory) or from bytes you
+already have (borrowed, not copied). You look with `peek*`, eat with `take*`,
+`expect*` and `p_*`. Failures are `Error`s that say `at line:col`.
+
+```c
+Parser p;
+Parser_newc(&p, "12 (hello world) 1 2 3");     // or Parser_newBytes / Parser_newString
+Parser_new(&p, FILE_reader(f));                // or any Reader
+...
+Parser_free(&p);
+```
+
+A piece of a String: `Parser_newBytes(&p, s.buf + from, len)`.
+
+| call | does |
+|------|------|
+| `Parser_peek1` / `Parser_take1` | next byte or `0` at the end (`Parser_eof` tells a real NUL apart) |
+| `Parser_peekn(p, i)` | the byte `i` ahead, nothing consumed |
+| `Parser_peekc(p, "+-")` / `Parser_takec` | the next byte if it is in the set, else `0` |
+| `Parser_peeks(p, "<=", "<")` / `Parser_takes` | the first listed string the input starts with, else `NULL` (longest first) |
+| `Parser_expectc` / `Parser_expects` | consume it or `EINVAL` |
+| `Parser_skipws`, `Parser_done`, `Parser_end` | skip whitespace; `done` also says if nothing is left; `end` fails if anything is |
+| `Parser_fail(p, code, fmt, ...)` | your own `Error`, with `at line:col` added |
+| `Parser_skipblank`, `Parser_atLineEnd`, `Parser_expectNewline`, `Parser_p_line` | line-based formats: spaces/tabs only, `\n` or `\r\n`, the end of input ends a last line |
+| `Parser_p_list(p, ",", item, ctx)` | items separated by a string (NULL: whitespace) up to the end; `item` is `Error fn(Parser *, void *ctx)` |
+| `Parser_p_sizet`, `Parser_p(p, &x)` | a number; `Parser_p` picks the type from `&x` like `cstr_to` (int, double, bool, ...) |
+| `Parser_p_until(p, ",;", &s)` / `Parser_p_while(p, isalpha, &s)` | text into a `String`, stop byte not consumed |
+| `Parser_mark` / `Parser_reset` | backtrack (free: the bytes stay in memory) |
+
+`Parser_skipws` skips newlines too. For one record per line use `Parser_skipblank`
+and `Parser_expectNewline` instead.
+
+A number takes the longest run that looks like one, so `"12abc"` gives 12 and
+leaves `abc`. A failed number consumes nothing.
+
+Groups parse a delimited piece on its own, and can't read past its end. They
+nest when the delimiters differ. There are no escapes:
+
+```c
+Error Rec_parse(Parser *p, Rec *out) {          // "<n> (<chars>) <n> <n> ... <n>"
+  Error eret = eok();
+  Parser g;
+  etry(Parser_p_sizet(p, &out->id));
+  Parser_skipws(p);
+  etry(Parser_group(p, &g, "(", ")"));
+  etry(Parser_p_until(&g, NULL, &out->name));   // to the end of the group
+  etry(Parser_groupEnd(&g));                    // unconsumed bytes are an error; p moves past ')'
+  while (!Parser_done(p)) {                      // skips whitespace, then checks for the end
+    size_t n;
+    etry(Parser_p_sizet(p, &n));
+    etry(array_push(&out->nums, &n));
+  }
+end:
+  return eret;
+}
+```
+
+- The parent doesn't move until `Parser_groupEnd`. Don't use it meanwhile.
+- A read error ends the input early and is remembered. `Parser_end`,
+  `Parser_groupEnd`, `Parser_ioerr` and any failing `expect*`/`p_*` report it;
+  a parser that never does can mistake it for the end.
+- A Reader's bytes are all kept until `Parser_free`.
 
 ## test.h — tiny test runner
 

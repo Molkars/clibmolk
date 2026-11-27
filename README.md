@@ -30,6 +30,7 @@ dependencies must be defined somewhere in the program too.
 | `btree.h`  | err                      | typed B-tree map; `btree_str_t` owns its keys |
 | `cstr.h`   | attr, err                | C-string helpers                        |
 | `str.h`    | array, attr, cstr, err, io | growable `String`                       |
+| `parser.h` | attr, cstr, err, io, str | recursive-descent `Parser` over a `Reader` or bytes: peek/take, numbers, groups |
 
 `deps.json` is the source of truth (`just deps` checks it against the
 includes). `err` has no idea `Writer` exists: `efprint` (plain `FILE *`) is in `err.h`, `eprint` (`Writer`) is in `io.h`.

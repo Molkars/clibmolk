@@ -7,6 +7,7 @@
 #define MOLKIE_IO_IMPL
 #define MOLKIE_CSTR_IMPL
 #define MOLKIE_STR_IMPL
+#define MOLKIE_PARSER_IMPL
 
 #include "err.h"
 #include "array.h"
@@ -14,6 +15,7 @@
 #include "io.h"
 #include "cstr.h"
 #include "str.h"
+#include "parser.h"
 
 int main(void) {
   int ok = 1;
@@ -23,5 +25,6 @@ int main(void) {
   ok &= err_tests();
   ok &= io_tests();
   ok &= str_tests();
+  ok &= parser_tests();
   return ok ? 0 : 1;
 }
