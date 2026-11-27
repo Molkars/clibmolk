@@ -388,6 +388,14 @@ String str = String_empty();
 etry(String_readFile("in.txt", 1 << 20, &str));
 ```
 
+Any `Reader` works the same way (a `FILE_reader`, a `Cursor_reader`, your own).
+It reads to the end into `str`, and more than `memmax` bytes is `EFBIG` (only
+one byte past the limit is read to find out):
+
+```c
+etry(String_readAll(FILE_reader(stdin), 1 << 20, &str));
+```
+
 Read a file by lines (no trailing `\n`/`\r\n`):
 
 ```c

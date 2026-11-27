@@ -85,6 +85,13 @@ NODISCARD Error FILE_readLines(FILE *f, Strings *lines);
 /// `out` is left empty. `out` must be a valid String (a zeroed one is fine)
 NODISCARD Error String_readFile(const char *path, size_t memmax, String *out);
 
+/// reads [r] to the end into `out`, replacing its contents. At most [memmax]
+/// bytes are kept: more input fails with `EFBIG` (a [memmax] of 0 only accepts
+/// empty input), and only one byte past the limit is read to find that out. On
+/// any failure, a read error included, `out` is left empty. `out` must be a
+/// valid String (a zeroed one is fine). `String_readFile` is this over a file
+NODISCARD Error String_readAll(Reader r, size_t memmax, String *out);
+
 /// removes leading and trailing whitespace from `s` in place
 void String_trim(String *s);
 
@@ -533,6 +540,36 @@ fail:
   return e;
 }
 
+Error String_readAll(Reader r, size_t memmax, String *out) {
+  if (!out)
+    return enew(EINVAL, "out is null");
+  String_reset(out);
+  if (!r.read)
+    return enew(EINVAL, "reader is not initialised");
+
+  Error eret = eok();
+  Error rerr = eok();
+  char chunk[BUFSIZ];
+  size_t nRead = 0, want;
+  do {
+    // ask for one byte past the limit so oversized input is noticed
+    size_t room = memmax - out->len;
+    want = room < sizeof chunk ? room + 1 : sizeof chunk;
+    rerr = Rread(r, chunk, want, &nRead);
+    // keep what arrived even if the read then failed
+    if (!String_extend(out, chunk, nRead) && rerr.ok)
+      rerr = enew(ENOMEM, "out of memory reading input");
+    if (rerr.ok && out->len > memmax)
+      rerr = enew(EFBIG, "input is larger than %zu bytes", memmax);
+  } while (rerr.ok && nRead == want);
+
+  if (!rerr.ok)
+    String_reset(out);
+  etry(rerr);
+end:
+  return eret;
+}
+
 Error String_readFile(const char *path, size_t memmax, String *out) {
   if (!out)
     return enew(EINVAL, "out is null");
@@ -541,28 +578,14 @@ Error String_readFile(const char *path, size_t memmax, String *out) {
     return enew(EINVAL, "path is null");
 
   Error eret = eok();
-  Error rerr = eok();
   FILE *f = NULL;
-  char chunk[BUFSIZ];
-  size_t nRead, want;
   etry(io_open(&f, path, "rb"));
-  do {
-    // ask for one byte past the limit so an oversized file is noticed
-    size_t room = memmax - out->len;
-    want = room < sizeof chunk ? room + 1 : sizeof chunk;
-    rerr = io_read(f, chunk, want, &nRead);
-    // keep what arrived even if the read then failed
-    if (!String_extend(out, chunk, nRead) && rerr.ok)
-      rerr = enew(ENOMEM, "out of memory reading %s", path);
-    if (rerr.ok && out->len > memmax)
-      rerr = enew(EFBIG, "%s is larger than %zu bytes", path, memmax);
-  } while (rerr.ok && nRead == want);
-
-  ejoin(&rerr, io_close(f)); // the read error wins over a close error
-  if (!rerr.ok)
-    String_reset(out);
-  etry(rerr);
+  etry2(String_readAll(FILE_reader(f), memmax, out), "reading %s", path);
 end:
+  if (f)
+    ejoin(&eret, io_close(f)); // the read error wins over a close error
+  if (!eret.ok)
+    String_reset(out);
   return eret;
 }
 
@@ -915,6 +938,88 @@ static void str_readfile_too_big(void) {
   }
 }
 
+typedef struct {
+  size_t calls;
+} FailAfter;
+
+// fills the first request (a short read would mean end of input), then fails
+static Error str_failing_read(void *ctx, char *buf, size_t n, size_t *nRead) {
+  FailAfter *f = ctx;
+  if (f->calls++ == 0) {
+    memset(buf, 'a', n);
+    *nRead = n;
+    return eok();
+  }
+  return enew(EIO, "boom");
+}
+
+static void str_readall(void) {
+  Cursor c = Cursor_init("hello", 5);
+  String s = String_fromc("stale");
+  assert(String_readAll(Cursor_reader(&c), 5, &s).ok); // exactly the limit
+  assert(String_eq(&s, "hello"));
+
+  c = Cursor_init("", 0);
+  assert(String_readAll(Cursor_reader(&c), 0, &s).ok && s.len == 0);
+
+  c = Cursor_init("x", 1);
+  Error e = String_readAll(Cursor_reader(&c), 0, &s); // 0 takes only empty
+  ASSERT_EQ(e.code, EFBIG);
+  efree(&e);
+  assert(s.len == 0);
+
+  c = Cursor_init("hello!", 6);
+  e = String_readAll(Cursor_reader(&c), 5, &s); // one byte over
+  ASSERT_EQ(e.code, EFBIG);
+  efree(&e);
+  assert(s.len == 0 && String_eq(&s, ""));
+  String_free(&s);
+}
+
+static void str_readall_big(void) {
+  // several read chunks, and a limit that lands inside and just past one
+  size_t n = BUFSIZ * 3 + 17;
+  char *in = malloc(n);
+  assert(in);
+  for (size_t i = 0; i < n; i++)
+    in[i] = (char)('a' + i % 26);
+  String s = String_empty();
+  Cursor c = Cursor_init(in, n);
+  assert(String_readAll(Cursor_reader(&c), SIZE_MAX, &s).ok);
+  assert(s.len == n && !memcmp(s.buf, in, n));
+  c = Cursor_init(in, n);
+  assert(String_readAll(Cursor_reader(&c), n, &s).ok && s.len == n);
+  c = Cursor_init(in, n);
+  Error e = String_readAll(Cursor_reader(&c), n - 1, &s);
+  ASSERT_EQ(e.code, EFBIG);
+  efree(&e);
+  assert(s.len == 0);
+  c = Cursor_init(in, n);
+  e = String_readAll(Cursor_reader(&c), BUFSIZ, &s);
+  ASSERT_EQ(e.code, EFBIG);
+  efree(&e);
+  String_free(&s);
+  free(in);
+}
+
+static void str_readall_errors(void) {
+  String s = String_fromc("stale");
+  FailAfter f = {0};
+  Error e = String_readAll((Reader){str_failing_read, &f}, SIZE_MAX, &s);
+  ASSERT_EQ(e.code, EIO); // the read error, and nothing half-read is left
+  efree(&e);
+  assert(s.len == 0);
+
+  Cursor c = Cursor_init("x", 1);
+  e = String_readAll(Cursor_reader(&c), 10, NULL);
+  ASSERT_EQ(e.code, EINVAL);
+  efree(&e);
+  e = String_readAll((Reader){0}, 10, &s);
+  ASSERT_EQ(e.code, EINVAL);
+  efree(&e);
+  String_free(&s);
+}
+
 static void str_readfile_errors(void) {
   String s = String_empty();
   Error e = String_readFile("/nonexistent/x", 10, &s);
@@ -940,6 +1045,9 @@ static int str_tests(void) {
       T(str_readfile),
       T(str_readfile_too_big),
       T(str_readfile_errors),
+      T(str_readall),
+      T(str_readall_big),
+      T(str_readall_errors),
       T(str_readlines),
       T(str_readlines_nul),
       T(str_readlines_crlf_boundary),
